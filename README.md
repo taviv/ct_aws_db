@@ -76,7 +76,7 @@ All tables are keyed by `nct_id`. One row per study in `studies` and `study_text
 
 ## Deploy
 
-Prerequisites: AWS CLI credentials, [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), Python 3.12 (or Docker: `sam build --use-container`).
+Prerequisites: AWS CLI credentials, [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), Python 3.13 or Docker (`make build` uses a Docker build automatically when Python 3.13 is not installed).
 
 ```bash
 make deploy      # sam build + sam deploy --guided (first time) + upload dashboards

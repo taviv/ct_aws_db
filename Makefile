@@ -18,8 +18,15 @@ fmt:
 validate:
 	sam validate --lint
 
+RUNTIME := $(shell sed -n 's/^ *Runtime: python//p' template.yaml | head -1)
+
+## Builds natively when the Lambda runtime's Python is installed, otherwise in Docker
 build:
-	sam build
+	@if command -v python$(RUNTIME) >/dev/null 2>&1 || [ "$$($(PY) -c 'import sys; print("%d.%d" % sys.version_info[:2])')" = "$(RUNTIME)" ]; then \
+		sam build; \
+	else \
+		echo "Python $(RUNTIME) not found; building in Docker"; sam build --use-container; \
+	fi
 
 ## First deploy: `make deploy` runs `sam deploy --guided` and saves samconfig.toml
 deploy: build
