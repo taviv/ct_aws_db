@@ -1,0 +1,309 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ClinicalTrials.gov pipeline (all phases): Step Functions + Lambda write raw NDJSON and
+  curated Parquet snapshots to S3; DuckDB answers dashboard queries; Athena for ad-hoc SQL;
+  dashboards served from S3 via CloudFront. No database or VPC.
+
+Parameters:
+  QueryTerm:
+    Type: String
+    Default: "AREA[Phase](EARLY_PHASE1 OR PHASE1 OR PHASE2 OR PHASE3 OR PHASE4)"
+    Description: ClinicalTrials.gov v2 query.term (Essie syntax) selecting the studies to ingest.
+  StartYear:
+    Type: String
+    Default: ""
+    Description: Optional - only ingest studies starting in or after this year (e.g. 2010).
+  Schedule:
+    Type: String
+    Default: "cron(0 6 ? * MON *)"
+    Description: EventBridge schedule for incremental runs.
+  GlueDatabaseName:
+    Type: String
+    Default: clinical_trials
+    AllowedPattern: "^[a-z0-9_]+$"
+  KeepSnapshots:
+    Type: Number
+    Default: 3
+    MinValue: 1
+  RawRetentionDays:
+    Type: Number
+    Default: 180
+    MinValue: 1
+
+Globals:
+  Function:
+    Runtime: python3.12
+    CodeUri: src/
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        CT_DATA_URI: !Sub "s3://${DataBucket}"
+        CT_SITE_URI: !Sub "s3://${SiteBucket}"
+        CT_QUERY_TERM: !Ref QueryTerm
+        CT_START_YEAR: !Ref StartYear
+        CT_GLUE_DATABASE: !Ref GlueDatabaseName
+        CT_KEEP_SNAPSHOTS: !Ref KeepSnapshots
+        CT_WORK_DIR: /tmp/ct
+
+Resources:
+  # ---------------------------------------------------------------- storage
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-raw
+            Status: Enabled
+            Prefix: raw/
+            ExpirationInDays: !Ref RawRetentionDays
+          - Id: expire-staging
+            Status: Enabled
+            Prefix: staging/
+            ExpirationInDays: 7
+          - Id: expire-athena-results
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: 30
+          - Id: abort-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 2 }
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudFrontRead
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  # ---------------------------------------------------------------- Athena (optional ad-hoc SQL)
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: Current ClinicalTrials.gov Parquet snapshot (tables repointed by every pipeline run)
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}"
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        BytesScannedCutoffPerQuery: 10737418240
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${DataBucket}/athena-results/"
+
+  # ---------------------------------------------------------------- functions
+  FetchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ct_pipeline.handlers.fetch_handler
+      Description: Fetch one ClinicalTrials.gov API page into raw/<run_id>/
+      Timeout: 120
+      MemorySize: 512
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref DataBucket }
+
+  TransformFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ct_pipeline.handlers.transform_handler
+      Description: DuckDB - one raw NDJSON page to staging Parquet tables
+      Timeout: 300
+      MemorySize: 2048
+      EphemeralStorage: { Size: 2048 }
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref DataBucket }
+
+  BuildFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ct_pipeline.handlers.build_handler
+      Description: DuckDB - merge staging into a new curated snapshot, publish overview JSON, update Glue
+      Timeout: 900
+      MemorySize: 6144
+      EphemeralStorage: { Size: 10240 }
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref DataBucket }
+        - S3CrudPolicy: { BucketName: !Ref SiteBucket }
+        - Statement:
+            - Effect: Allow
+              Action: [glue:GetDatabase, glue:GetTable, glue:CreateTable, glue:UpdateTable]
+              Resource:
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*"
+
+  QueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ct_pipeline.handlers.query_handler
+      Description: Read-only DuckDB query API over the current snapshot (only reachable via CloudFront)
+      Timeout: 30
+      MemorySize: 2048
+      EphemeralStorage: { Size: 2048 }
+      ReservedConcurrentExecutions: 10
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
+      Policies:
+        - S3ReadPolicy: { BucketName: !Ref DataBucket }
+
+  QueryFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref QueryFunction
+      Action: lambda:InvokeFunctionUrl
+      FunctionUrlAuthType: AWS_IAM
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  QueryFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref QueryFunction
+      Action: lambda:InvokeFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  # ---------------------------------------------------------------- orchestration
+  PipelineStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/pipeline.asl.json
+      DefinitionSubstitutions:
+        FetchFunctionArn: !GetAtt FetchFunction.Arn
+        TransformFunctionArn: !GetAtt TransformFunction.Arn
+        BuildFunctionArn: !GetAtt BuildFunction.Arn
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref FetchFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref TransformFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref BuildFunction }
+      Events:
+        Weekly:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref Schedule
+            Input: '{"mode": "incremental"}'
+
+  # ---------------------------------------------------------------- CDN
+  SiteOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-site"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ApiOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-api"
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ShortCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub "${AWS::StackName}-short"
+        DefaultTTL: 900
+        MaxTTL: 3600
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig: { CookieBehavior: none }
+          HeadersConfig: { HeaderBehavior: none }
+          QueryStringsConfig: { QueryStringBehavior: all }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} dashboards"
+        DefaultRootObject: dashboard.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SiteOAC.Id
+            S3OriginConfig: { OriginAccessIdentity: "" }
+          - Id: api
+            DomainName: !Select [2, !Split ["/", !GetAtt QueryFunctionUrl.FunctionUrl]]
+            OriginAccessControlId: !GetAtt ApiOAC.Id
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+        CacheBehaviors:
+          - PathPattern: data/*
+            TargetOriginId: site
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: !Ref ShortCachePolicy
+          - PathPattern: api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            Compress: true
+            CachePolicyId: !Ref ShortCachePolicy
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+
+Outputs:
+  DashboardUrl:
+    Value: !Sub "https://${Distribution.DomainName}/"
+  DistributionId:
+    Value: !Ref Distribution
+  DataBucketName:
+    Value: !Ref DataBucket
+  SiteBucketName:
+    Value: !Ref SiteBucket
+  StateMachineArn:
+    Value: !Ref PipelineStateMachine
+  AthenaWorkGroup:
+    Value: !Ref AthenaWorkGroup
+  GlueDatabase:
+    Value: !Ref GlueDatabaseName

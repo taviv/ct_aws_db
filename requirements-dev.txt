@@ -1,0 +1,6 @@
+-r src/requirements.txt
+boto3>=1.34
+moto[s3,glue]>=5.0
+pytest>=8.0
+ruff>=0.6
+cfn-lint>=1.0

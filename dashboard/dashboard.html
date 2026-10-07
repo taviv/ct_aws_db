@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClinicalTrials Clinical Trials Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3e;
+      --text:     #e2e8f0;
+      --muted:    #8892a4;
+      --accent:   #6366f1;
+      --green:    #22c55e;
+      --yellow:   #eab308;
+      --red:      #ef4444;
+      --blue:     #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    #refresh-btn {
+      background: var(--accent); color: #fff; border: none;
+      padding: 8px 18px; border-radius: 6px; cursor: pointer;
+      font-size: 0.85rem; font-weight: 600; transition: opacity .2s;
+    }
+    #refresh-btn:hover { opacity: .85; }
+    #refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Nav ── */
+    nav {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex; gap: 4px;
+    }
+    nav a {
+      display: inline-block; padding: 10px 16px;
+      font-size: 0.82rem; font-weight: 600; text-decoration: none;
+      color: var(--muted); border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Layout ── */
+    main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ── Summary cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 16px; margin-bottom: 28px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px 18px;
+    }
+    .card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+                   letter-spacing: .06em; margin-bottom: 8px; }
+    .card .value { font-size: 1.9rem; font-weight: 700; line-height: 1; }
+    .card .sub   { font-size: 0.75rem; color: var(--muted); margin-top: 5px; }
+    .card.green .value { color: var(--green); }
+    .card.blue  .value { color: var(--blue);  }
+    .card.yellow .value { color: var(--yellow); }
+    .card.red   .value { color: var(--red);   }
+    .card.accent .value { color: var(--accent); }
+
+    /* ── Chart grid ── */
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 20px; margin-bottom: 28px;
+    }
+    .chart-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px;
+    }
+    .chart-box h2 {
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    .chart-box canvas { width: 100% !important; }
+
+    /* ── Table ── */
+    .table-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px; overflow-x: auto;
+    }
+    .table-box h2 {
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    th {
+      text-align: left; padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 600;
+      text-transform: uppercase; font-size: 0.72rem; letter-spacing: .05em;
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(99,102,241,.06); }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 0.7rem; font-weight: 600; white-space: nowrap;
+    }
+    .badge.COMPLETED            { background:#16533a; color:#4ade80; }
+    .badge.RECRUITING           { background:#1e3a5f; color:#60a5fa; }
+    .badge.ACTIVE_NOT_RECRUITING{ background:#3b2f00; color:#fbbf24; }
+    .badge.TERMINATED           { background:#4c1d1d; color:#f87171; }
+    .badge.NOT_YET_RECRUITING   { background:#1f2d3d; color:#93c5fd; }
+    .badge.WITHDRAWN            { background:#2d2d2d; color:#9ca3af; }
+    .badge.UNKNOWN_STATUS       { background:#2d2d2d; color:#9ca3af; }
+
+    /* ── Loading / error ── */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin .6s linear infinite; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { color: var(--red); font-size: 0.82rem; padding: 8px 0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚗️ ClinicalTrials.gov — Clinical Trials Dashboard</h1>
+    <p id="last-updated">Loading…</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <select id="phase-select" onchange="loadAll()" aria-label="Phase"
+            style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+      <option value="ALL">All phases</option>
+    </select>
+    <button id="refresh-btn" onclick="OVERVIEW = null; loadAll()">↻ Refresh</button>
+  </div>
+</header>
+
+<nav>
+  <a href="dashboard.html" class="active">Overview</a>
+  <a href="dashboard_duration.html">Study Duration</a>
+</nav>
+
+<main>
+  <!-- Summary cards -->
+  <div class="cards" id="cards">
+    <div class="card"><div class="label">Total Studies</div><div class="value" id="c-total">—</div></div>
+    <div class="card green"><div class="label">Completed</div><div class="value" id="c-completed">—</div></div>
+    <div class="card blue"><div class="label">Recruiting</div><div class="value" id="c-recruiting">—</div></div>
+    <div class="card yellow"><div class="label">Active (Not Recruiting)</div><div class="value" id="c-active">—</div></div>
+    <div class="card accent"><div class="label">FDA Regulated Drug</div><div class="value" id="c-fda">—</div></div>
+    <div class="card"><div class="label">Healthy Volunteers</div><div class="value" id="c-hv">—</div></div>
+    <div class="card green"><div class="label">Has Results</div><div class="value" id="c-results">—</div></div>
+    <div class="card red"><div class="label">Terminated</div><div class="value" id="c-terminated">—</div></div>
+  </div>
+
+  <!-- Row 1: status, year, sponsor -->
+  <div class="chart-grid">
+    <div class="chart-box"><h2>Study Status</h2><canvas id="chart-status" height="260"></canvas></div>
+    <div class="chart-box" style="grid-column: span 2"><h2>Studies Started by Year</h2><canvas id="chart-year" height="220"></canvas></div>
+  </div>
+
+  <!-- Row 2: conditions, countries -->
+  <div class="chart-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:28px">
+    <div class="chart-box"><h2>Top 15 Conditions</h2><canvas id="chart-conditions" height="380"></canvas></div>
+    <div class="chart-box"><h2>Top 15 Countries (Sites)</h2><canvas id="chart-countries" height="380"></canvas></div>
+  </div>
+
+  <!-- Row 3: sponsor class, intervention types, enrollment -->
+  <div class="chart-grid">
+    <div class="chart-box"><h2>Sponsor Class</h2><canvas id="chart-sponsor" height="260"></canvas></div>
+    <div class="chart-box"><h2>Intervention Types</h2><canvas id="chart-intervention" height="260"></canvas></div>
+    <div class="chart-box"><h2>Enrollment Size</h2><canvas id="chart-enrollment" height="260"></canvas></div>
+  </div>
+
+  <!-- Recent studies table -->
+  <div class="table-box">
+    <h2>Most Recent Studies</h2>
+    <table id="table-recent">
+      <thead>
+        <tr>
+          <th>NCT ID</th><th>Title</th><th>Status</th>
+          <th>Start Date</th><th>Sponsor</th><th>Class</th><th>Enrollment</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-recent"><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+// ─────────────────────────────────────────────
+// Overview data is precomputed by the pipeline (one block per phase group)
+// and published next to this page as data/overview.json.
+const OVERVIEW_URL = "data/overview.json";
+
+const PALETTE = [
+  "#6366f1","#22c55e","#3b82f6","#eab308","#ef4444",
+  "#a855f7","#14b8a6","#f97316","#ec4899","#06b6d4",
+  "#84cc16","#8b5cf6","#f43f5e","#10b981","#0ea5e9",
+];
+
+const charts = {};
+
+let OVERVIEW = null;
+
+async function loadOverview() {
+  if (OVERVIEW) return OVERVIEW;
+  const res = await fetch(OVERVIEW_URL, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} loading ${OVERVIEW_URL}`);
+  OVERVIEW = await res.json();
+  const sel = document.getElementById("phase-select");
+  const current = sel.value;
+  sel.length = 1;
+  OVERVIEW.phases.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.value;
+    opt.textContent = `${p.label} (${Number(p.studies).toLocaleString()})`;
+    sel.appendChild(opt);
+  });
+  sel.value = OVERVIEW.by_phase[current] ? current : "ALL";
+  return OVERVIEW;
+}
+
+async function query(name) {
+  const data = await loadOverview();
+  const phase = document.getElementById("phase-select").value || "ALL";
+  const block = data.by_phase[phase] || data.by_phase.ALL;
+  if (!(name in block)) throw new Error(`Query ${name} missing from ${OVERVIEW_URL}`);
+  return block[name];
+}
+
+function fmt(n) {
+  return n == null ? "—" : Number(n).toLocaleString();
+}
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+// ── Summary cards ──────────────────────────────────────────────────────────
+async function loadSummary() {
+  const d = await query("summary_stats");
+  document.getElementById("c-total").textContent     = fmt(d.total_studies);
+  document.getElementById("c-completed").textContent = fmt(d.completed);
+  document.getElementById("c-recruiting").textContent = fmt(d.recruiting);
+  document.getElementById("c-active").textContent    = fmt(d.active_not_recruiting);
+  document.getElementById("c-fda").textContent       = fmt(d.fda_regulated_drug);
+  document.getElementById("c-hv").textContent        = fmt(d.healthy_volunteers);
+  document.getElementById("c-results").textContent   = fmt(d.has_results);
+  document.getElementById("c-terminated").textContent = fmt(d.terminated);
+}
+
+// ── Status donut ───────────────────────────────────────────────────────────
+async function loadStatus() {
+  const d = await query("status_breakdown");
+  const labels = d.rows.map(r => r[0]);
+  const values = d.rows.map(r => r[1]);
+  destroyChart("status");
+  charts["status"] = new Chart(document.getElementById("chart-status"), {
+    type: "doughnut",
+    data: { labels, datasets: [{ data: values, backgroundColor: PALETTE, borderWidth: 2, borderColor: "#1a1d27" }] },
+    options: {
+      plugins: { legend: { position: "right", labels: { color: "#e2e8f0", font: { size: 11 }, boxWidth: 12 } } },
+      cutout: "60%",
+    },
+  });
+}
+
+// ── Studies by year bar ────────────────────────────────────────────────────
+async function loadByYear() {
+  const d = await query("studies_by_year");
+  destroyChart("year");
+  charts["year"] = new Chart(document.getElementById("chart-year"), {
+    type: "bar",
+    data: {
+      labels: d.rows.map(r => r[0]),
+      datasets: [{ label: "Studies Started", data: d.rows.map(r => r[1]),
+        backgroundColor: "#6366f1", borderRadius: 4, borderSkipped: false }],
+    },
+    options: {
+      scales: {
+        x: { ticks: { color: "#8892a4" }, grid: { color: "#2a2d3e" } },
+        y: { ticks: { color: "#8892a4" }, grid: { color: "#2a2d3e" } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+// ── Horizontal bar helper ──────────────────────────────────────────────────
+function hBar(canvasId, data, color) {
+  destroyChart(canvasId);
+  charts[canvasId] = new Chart(document.getElementById("chart-" + canvasId), {
+    type: "bar",
+    data: {
+      labels: data.rows.map(r => r[0]),
+      datasets: [{ data: data.rows.map(r => r[1]),
+        backgroundColor: color || "#6366f1", borderRadius: 4, borderSkipped: false }],
+    },
+    options: {
+      indexAxis: "y",
+      scales: {
+        x: { ticks: { color: "#8892a4" }, grid: { color: "#2a2d3e" } },
+        y: { ticks: { color: "#e2e8f0", font: { size: 11 } }, grid: { display: false } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+// ── Donut helper ───────────────────────────────────────────────────────────
+function donut(canvasId, data) {
+  destroyChart(canvasId);
+  charts[canvasId] = new Chart(document.getElementById("chart-" + canvasId), {
+    type: "doughnut",
+    data: {
+      labels: data.rows.map(r => r[0]),
+      datasets: [{ data: data.rows.map(r => r[1]),
+        backgroundColor: PALETTE, borderWidth: 2, borderColor: "#1a1d27" }],
+    },
+    options: {
+      plugins: { legend: { position: "bottom", labels: { color: "#e2e8f0", font: { size: 11 }, boxWidth: 12 } } },
+      cutout: "60%",
+    },
+  });
+}
+
+// ── Recent studies table ───────────────────────────────────────────────────
+async function loadRecentTable() {
+  const d = await query("recent_studies");
+  const tbody = document.getElementById("tbody-recent");
+  tbody.innerHTML = d.rows.map(r => {
+    const [nct, title, status, start, sponsor, cls, enroll] = r;
+    const badge = `<span class="badge ${status || 'UNKNOWN_STATUS'}">${(status||"UNKNOWN").replace(/_/g," ")}</span>`;
+    const truncTitle = title && title.length > 70 ? title.slice(0,70) + "…" : (title||"—");
+    return `<tr>
+      <td><a href="https://clinicaltrials.gov/study/${nct}" target="_blank"
+             style="color:#6366f1;text-decoration:none">${nct}</a></td>
+      <td title="${title||''}">${truncTitle}</td>
+      <td>${badge}</td>
+      <td>${start||"—"}</td>
+      <td>${sponsor||"—"}</td>
+      <td>${cls||"—"}</td>
+      <td style="text-align:right">${enroll!=null?Number(enroll).toLocaleString():"—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Load everything ────────────────────────────────────────────────────────
+async function loadAll() {
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Loading…';
+  document.getElementById("last-updated").textContent = "Loading…";
+
+  try {
+    await Promise.all([
+      loadSummary(),
+      loadStatus(),
+      loadByYear(),
+      query("top_conditions").then(d  => hBar("conditions",   d, "#6366f1")),
+      query("top_countries").then(d   => hBar("countries",    d, "#22c55e")),
+      query("sponsor_class").then(d   => donut("sponsor",       d)),
+      query("intervention_types").then(d => donut("intervention", d)),
+      query("enrollment_distribution").then(d => hBar("enrollment", d, "#3b82f6")),
+      loadRecentTable(),
+    ]);
+    const generated = OVERVIEW && OVERVIEW.generated_at
+      ? new Date(OVERVIEW.generated_at).toLocaleString() : "unknown";
+    document.getElementById("last-updated").textContent =
+      `Data refreshed: ${generated} · loaded ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById("last-updated").textContent = `Error: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "↻ Refresh";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadAll);
+</script>
+</body>
+</html>

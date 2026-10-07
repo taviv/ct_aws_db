@@ -1,0 +1,124 @@
+{
+  "Comment": "ClinicalTrials.gov -> S3 raw NDJSON -> staging Parquet (per page, parallel) -> curated Parquet snapshot + static dashboard JSON",
+  "StartAt": "StartRun",
+  "States": {
+    "StartRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchFunctionArn}",
+        "Payload": { "action": "start", "input.$": "$" }
+      },
+      "ResultSelector": { "state.$": "$.Payload" },
+      "ResultPath": "$",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "RunFailed" }],
+      "Next": "FetchPage"
+    },
+    "FetchPage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchFunctionArn}",
+        "Payload": { "action": "fetch_page", "state.$": "$.state" }
+      },
+      "ResultSelector": { "state.$": "$.Payload" },
+      "ResultPath": "$",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2
+        },
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "RunFailed" }],
+      "Next": "MorePages"
+    },
+    "MorePages": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.state.done", "BooleanEquals": true, "Next": "FinalizeFetch" }],
+      "Default": "FetchPage"
+    },
+    "FinalizeFetch": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchFunctionArn}",
+        "Payload": { "action": "finalize", "state.$": "$.state" }
+      },
+      "ResultSelector": { "run.$": "$.Payload" },
+      "ResultPath": "$",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "RunFailed" }],
+      "Next": "AnyChanges"
+    },
+    "AnyChanges": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.run.file_count", "NumericEquals": 0, "Next": "NoChanges" }],
+      "Default": "TransformPages"
+    },
+    "NoChanges": { "Type": "Succeed", "Comment": "Incremental run found no updated studies" },
+    "TransformPages": {
+      "Type": "Map",
+      "ItemsPath": "$.run.files",
+      "MaxConcurrency": 10,
+      "ItemSelector": { "run_id.$": "$.run.run_id", "key.$": "$$.Map.Item.Value" },
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "TransformPage",
+        "States": {
+          "TransformPage": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": { "FunctionName": "${TransformFunctionArn}", "Payload.$": "$" },
+            "ResultSelector": { "studies.$": "$.Payload.studies" },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 2, "MaxAttempts": 5, "BackoffRate": 2
+              },
+              { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "RunFailed" }],
+      "Next": "BuildSnapshot"
+    },
+    "BuildSnapshot": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${BuildFunctionArn}",
+        "Payload": {
+          "run_id.$": "$.run.run_id",
+          "mode.$": "$.run.mode",
+          "fetch_started_at.$": "$.run.fetch_started_at"
+        }
+      },
+      "ResultSelector": { "snapshot.$": "$.Payload" },
+      "ResultPath": "$.result",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "RunFailed" }],
+      "End": true
+    },
+    "RunFailed": { "Type": "Fail", "Error": "PipelineFailed", "Cause": "See the failed state's error in the execution history" }
+  }
+}
