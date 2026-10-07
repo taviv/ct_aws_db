@@ -30,6 +30,14 @@ Parameters:
     Type: Number
     Default: 180
     MinValue: 1
+  QueryReservedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Reserved concurrency for the query API (0 = none; new AWS accounts often have a total limit of 10, which leaves nothing to reserve).
+
+Conditions:
+  ReserveQueryConcurrency: !Not [!Equals [!Ref QueryReservedConcurrency, 0]]
 
 Globals:
   Function:
@@ -176,7 +184,7 @@ Resources:
       Timeout: 30
       MemorySize: 2048
       EphemeralStorage: { Size: 2048 }
-      ReservedConcurrentExecutions: 10
+      ReservedConcurrentExecutions: !If [ReserveQueryConcurrency, !Ref QueryReservedConcurrency, !Ref AWS::NoValue]
       FunctionUrlConfig:
         AuthType: AWS_IAM
       Policies:
