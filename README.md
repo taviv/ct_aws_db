@@ -90,6 +90,8 @@ Stack parameters:
 |---|---|---|
 | `QueryTerm` | `AREA[Phase](EARLY_PHASE1 OR PHASE1 OR PHASE2 OR PHASE3 OR PHASE4)` | Essie expression selecting studies; e.g. `AREA[StudyType]INTERVENTIONAL` for all interventional studies |
 | `StartYear` | — | only studies starting in/after this year |
+| `BuildMemorySize` | 3008 | Build Lambda memory (MB); new accounts are capped at 3008 |
+| `QueryReservedConcurrency` | 0 | reserved concurrency for the query API (0 = none) |
 | `Schedule` | `cron(0 6 ? * MON *)` | incremental run schedule |
 | `KeepSnapshots` | 3 | curated snapshots kept for rollback |
 | `RawRetentionDays` | 180 | raw NDJSON lifecycle |

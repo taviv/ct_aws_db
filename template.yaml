@@ -30,6 +30,12 @@ Parameters:
     Type: Number
     Default: 180
     MinValue: 1
+  BuildMemorySize:
+    Type: Number
+    Default: 3008
+    MinValue: 1024
+    MaxValue: 10240
+    Description: Build Lambda memory in MB. 3008 is the maximum on new AWS accounts; DuckDB spills to /tmp beyond it. Use 6144+ for faster all-phases builds if your account allows it.
   QueryReservedConcurrency:
     Type: Number
     Default: 0
@@ -163,7 +169,7 @@ Resources:
       Handler: ct_pipeline.handlers.build_handler
       Description: DuckDB - merge staging into a new curated snapshot, publish overview JSON, update Glue
       Timeout: 900
-      MemorySize: 6144
+      MemorySize: !Ref BuildMemorySize
       EphemeralStorage: { Size: 10240 }
       Policies:
         - S3CrudPolicy: { BucketName: !Ref DataBucket }
