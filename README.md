@@ -131,6 +131,25 @@ INSTALL httpfs; LOAD httpfs; CREATE SECRET (TYPE s3, PROVIDER credential_chain);
 SELECT * FROM read_parquet('s3://<data-bucket>/curated/<run_id>/studies/data.parquet') LIMIT 10;
 ```
 
+### Verifying the data
+
+`make verify` (needs AWS credentials, e.g. CloudShell) checks the published snapshot and prints PASS / WARN / FAIL per check:
+
+| Check | Passes when |
+|---|---|
+| Latest pipeline run | the newest Step Functions execution SUCCEEDED |
+| Snapshot freshness | `CURRENT.json` is at most 8 days old |
+| Row counts | every Parquet file has the row count recorded in `CURRENT.json` |
+| Unique studies | one row per `nct_id` in `studies` and `study_text` |
+| Matches ClinicalTrials.gov | the snapshot's NCT IDs equal the API's for the stack's `QueryTerm`/`StartYear` (within 1%: the source changes between weekly runs) |
+| Start year filter | no study starts before `StartYear` |
+| Orphan rows | every child-table row has a study |
+| Durations | no completion date before the start date (WARN only: that is how the source has it) |
+| Dashboard overview / API | `data/overview.json` and `api/query` serve the current run with the same numbers as the snapshot |
+| Spot check vs source | title, status, start/completion dates and phases of 20 random studies equal the API's (studies updated since the snapshot are skipped) |
+
+It exits non-zero if anything fails, so it can also run after `make backfill` in scripts.
+
 ### Rollback
 
 Each snapshot is immutable. To roll back, copy an older `curated/<run_id>/` reference into

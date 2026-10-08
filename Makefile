@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -45,6 +45,13 @@ backfill:
 
 run:
 	aws stepfunctions start-execution --state-machine-arn $(call out,StateMachineArn) --input '{"mode":"incremental"}'
+
+## Data integrity checks against the live stack (README: "Verifying the data")
+VERIFY_PY := $(shell command -v python$(RUNTIME) || echo $(PY))
+verify:
+	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
+	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
+	.verify-venv/bin/python scripts/verify.py --stack $(STACK)
 
 ## Local pipeline + dashboards, no AWS needed (MAX_PAGES=0 fetches everything)
 MAX_PAGES ?= 3
