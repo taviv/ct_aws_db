@@ -1,8 +1,16 @@
 # ClinicalTrials.gov Pipeline — all phases, S3 Parquet + DuckDB
 
-Weekly pipeline that pulls interventional trials of **every phase** (Early Phase 1 → Phase 4)
-from the [ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api), stores them as
-Parquet on S3, and serves two dashboards. No database, no VPC, nothing running between runs.
+Weekly pipeline that pulls clinical trials from the
+[ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api), stores them as Parquet on
+S3, and serves two dashboards. No database, no VPC, nothing running between runs.
+
+Which studies are loaded is set by two stack parameters. By default that is every phased
+study (Early Phase 1 → Phase 4, ~224k). `QueryTerm=AREA[Phase]PHASE1 StartYear=2016` limits it
+to Phase 1 (including Phase 1/2) studies starting in 2016 or later (~35k).
+
+Dashboards (paths under the `DashboardUrl` stack output):
+- `/`: overview (status, phases, sponsors, conditions, countries, enrollment), filterable by phase
+- `/dashboard_duration.html`: start → completion duration of completed studies
 
 ```
 EventBridge (weekly) ──► Step Functions
@@ -51,10 +59,12 @@ src/ct_pipeline/      one package, four Lambda handlers (handlers.py)
   queries.py          dashboard SQL shared by build and query API
   query_api.py        Function URL handler
   glue.py             registers the snapshot in the Glue catalog
+  db.py               DuckDB connections that spill only under CT_WORK_DIR
+  verify.py           data integrity checks behind `make verify`
 statemachine/         Step Functions definition (ASL)
 template.yaml         SAM template: buckets, functions, state machine, schedule, CloudFront, Athena
 dashboard/            static dashboards (Chart.js)
-scripts/              local_pipeline.py, dev_server.py
+scripts/              local_pipeline.py, dev_server.py, verify.py
 tests/                pytest (fixtures are real API records)
 ```
 
@@ -77,18 +87,23 @@ All tables are keyed by `nct_id`. One row per study in `studies` and `study_text
 ## Deploy
 
 Prerequisites: AWS CLI credentials, [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), Python 3.13 or Docker (`make build` uses a Docker build automatically when Python 3.13 is not installed).
+[AWS CloudShell](https://console.aws.amazon.com/cloudshell) has all of these; clone the repo there and run:
 
 ```bash
-make deploy      # sam build + sam deploy --guided (first time) + upload dashboards
-make backfill    # first load: full fetch of all phased studies (~225 pages)
+make deploy      # sam build + sam deploy (--guided the first time, saving samconfig.toml) + upload dashboards
+make backfill    # first load / after changing QueryTerm or StartYear: full fetch, replaces the snapshot
 make run         # incremental run now (the schedule does this weekly)
+make verify      # data integrity checks (see "Verifying the data")
 ```
+
+Use `make deploy` rather than `sam deploy`: plain `sam deploy` does not upload the dashboard
+HTML (`make dashboards` does that on its own).
 
 Stack parameters:
 
 | Parameter | Default | |
 |---|---|---|
-| `QueryTerm` | `AREA[Phase](EARLY_PHASE1 OR PHASE1 OR PHASE2 OR PHASE3 OR PHASE4)` | Essie expression selecting studies; e.g. `AREA[StudyType]INTERVENTIONAL` for all interventional studies |
+| `QueryTerm` | `AREA[Phase](EARLY_PHASE1 OR PHASE1 OR PHASE2 OR PHASE3 OR PHASE4)` | [Essie expression](https://clinicaltrials.gov/find-studies/constructing-complex-search-queries) selecting studies, e.g. `AREA[Phase]PHASE1` or `AREA[StudyType]INTERVENTIONAL` |
 | `StartYear` | — | only studies starting in/after this year |
 | `BuildMemorySize` | 3008 | Build Lambda memory (MB); new accounts are capped at 3008 |
 | `QueryReservedConcurrency` | 0 | reserved concurrency for the query API (0 = none) |
@@ -97,12 +112,59 @@ Stack parameters:
 | `RawRetentionDays` | 180 | raw NDJSON lifecycle |
 | `GlueDatabaseName` | `clinical_trials` | Athena database |
 
-After changing `QueryTerm`, run `make backfill` so the snapshot matches the new filter.
+Always filter on a field with `AREA[Field]...`. A bare word is a free-text search:
+`QueryTerm=PHASE1` also matches ~2k non-Phase-1 studies that only mention "phase 1" in their text.
 
-The dashboard URL is the `DashboardUrl` stack output. The query API is only reachable through
-CloudFront (the Function URL requires SigV4 signed by CloudFront's OAC), has reserved
-concurrency 10, and returns generic error messages. Put CloudFront behind an auth layer
+To change a parameter, edit `parameter_overrides` in `samconfig.toml` (or rerun
+`sam deploy --guided`), then `make deploy`. `sam deploy --parameter-overrides ...` on the command
+line is not saved, so the next `make deploy` would revert it. After changing `QueryTerm` or
+`StartYear`, run `make backfill` so the snapshot matches the new filter.
+
+```bash
+aws cloudformation describe-stacks --stack-name ct-pipeline --query "Stacks[0].Parameters" --output table
+aws cloudformation describe-stacks --stack-name ct-pipeline --query "Stacks[0].Outputs" --output table
+```
+
+The query API is only reachable through CloudFront (the Function URL requires SigV4 signed by
+CloudFront's OAC) and returns generic error messages. Put CloudFront behind an auth layer
 (e.g. Cognito / Lambda@Edge / IP allow-list) if the dashboards must not be public.
+
+Lambda sizing (`template.yaml`, Python 3.13):
+
+| Function | Memory | Timeout | `/tmp` |
+|---|---|---|---|
+| Fetch | 512 MB | 2 min | default |
+| Transform (one 1,000-study page) | 2048 MB | 5 min | 2 GB |
+| Build | `BuildMemorySize` (3008 MB) | 15 min | 10 GB |
+| Query | 2048 MB | 30 s | 2 GB |
+
+The Lambda code directory is read-only. All DuckDB work, including spill files, goes under
+`CT_WORK_DIR` (`/tmp/ct`) via `ct_pipeline.db.connect`, so never call `duckdb.connect()` directly.
+
+## Operations
+
+The weekly schedule (an EventBridge rule created with the stack) starts an incremental run every
+Monday 06:00 UTC. Each run fetches only studies updated since the previous successful run, merges
+them into the current snapshot, and republishes the dashboards' data.
+
+```bash
+# schedule is enabled
+aws events list-rules --query "Rules[?contains(Name,'Weekly')].[Name,State,ScheduleExpression]" --output table
+
+# recent runs
+SM=$(aws cloudformation describe-stacks --stack-name ct-pipeline --query "Stacks[0].Outputs[?OutputKey=='StateMachineArn'].OutputValue" --output text)
+aws stepfunctions list-executions --state-machine-arn $SM --max-results 5 --query "executions[].[name,status,startDate,stopDate]" --output table
+
+# why the latest run failed
+ARN=$(aws stepfunctions list-executions --state-machine-arn $SM --max-results 1 --query "executions[0].executionArn" --output text)
+aws stepfunctions get-execution-history --execution-arn $ARN --reverse-order --max-results 25 \
+  --query "events[?ends_with(type,'Failed') || ends_with(type,'TimedOut')].[type, taskFailedEventDetails.error || executionFailedEventDetails.error, taskFailedEventDetails.cause || executionFailedEventDetails.cause]" --output json
+```
+
+A failed run changes nothing: `CURRENT.json`, the watermark and the dashboards keep the previous
+snapshot, and the next run starts from that watermark. Before the first successful run,
+CloudFront returns 403 for `data/overview.json` and the API returns 500, so the dashboards are
+empty. After a run, the dashboards can take up to 15 minutes to show it (CloudFront cache).
 
 ### Query API
 
@@ -111,8 +173,8 @@ concurrency 10, and returns generic error messages. Put CloudFront behind an aut
 Queries: `duration_summary`, `duration_histogram`, `duration_by_year`, `duration_by_sponsor`,
 `duration_by_phase`, `duration_studies`, plus every overview query (`summary_stats`,
 `status_breakdown`, `studies_by_year`, `top_conditions`, `top_countries`, `sponsor_class`,
-`top_interventions`, `enrollment_distribution`, `recent_studies`, `phase_groups`,
-`countries_completed`). Duration queries cover completed studies only. `POST` with
+`fda_regulated`, `intervention_types`, `enrollment_distribution`, `recent_studies`,
+`phase_groups`, `countries_completed`). Duration queries cover completed studies only. `POST` with
 `{"query": ..., "filters": {...}}` is also accepted.
 
 ### Ad-hoc SQL
@@ -159,12 +221,15 @@ query API picks up the change within 5 minutes; rerun a build to regenerate `ove
 ## Local development (no AWS)
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+make install                 # pip install -r requirements-dev.txt
 make test                    # pytest
 make lint                    # ruff + cfn-lint
 make local MAX_PAGES=3       # fetch 3 pages from the live API → ./local/{data,site}
 make serve                   # dashboards + /api on http://localhost:8000
 ```
+
+CI (`.github/workflows/ci.yml`) runs ruff, pytest, cfn-lint, `sam validate --lint` and `sam build`
+on every pull request.
 
 `scripts/local_pipeline.py --data s3://bucket --site s3://site-bucket` runs the same code
 against real buckets.
