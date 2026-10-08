@@ -12,10 +12,9 @@ import shutil
 import time
 from pathlib import Path
 
-import duckdb
-
 from .build import attach_snapshot
 from .config import CURRENT_KEY, Settings
+from .db import connect
 from .queries import ALL_QUERIES, run_query
 from .storage import Store, open_store
 
@@ -43,7 +42,7 @@ def _connection(settings: Settings, store: Store):
     target = base / current["run_id"]
     for table in API_TABLES:
         store.download(current["tables"][table], target / table / "data.parquet")
-    con = duckdb.connect()
+    con = connect(Path(settings.work_dir) / "duckdb")
     attach_snapshot(con, target, API_TABLES)
     if _state["con"] is not None:
         _state["con"].close()

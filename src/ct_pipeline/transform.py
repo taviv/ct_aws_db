@@ -12,6 +12,7 @@ from pathlib import Path
 import duckdb
 
 from .config import STAGING_PREFIX, Settings
+from .db import connect
 from .storage import Store
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ def transform_page(settings: Settings, store: Store, run_id: str, key: str) -> d
     local = work / Path(key).name
     store.download(key, local)
     try:
-        con = duckdb.connect()
+        con = connect(work)
         counts = transform_file(con, local, work / "out", page)
         con.close()
         for table in TABLES:

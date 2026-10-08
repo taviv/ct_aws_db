@@ -13,9 +13,8 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-import duckdb
-
 from .config import CURATED_PREFIX, CURRENT_KEY, OVERVIEW_KEY, STAGING_PREFIX, WATERMARK_KEY, Settings
+from .db import connect
 from .queries import OVERVIEW_QUERIES, PHASE_GROUP_LABELS, run_query
 from .storage import Store
 from .transform import TABLES
@@ -103,8 +102,7 @@ def build_snapshot(
             if table in TABLES:
                 store.download(key, current_dir / f"{table}.parquet")
 
-    (work / "tmp").mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(config={"temp_directory": str(work / "tmp")})
+    con = connect(work)
     try:
         counts = merge_tables(con, staging_dir, current_dir if use_current else None, out_dir)
 
