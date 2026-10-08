@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 import duckdb
@@ -59,3 +60,21 @@ def test_transform_derived_columns(con, tmp_path):
     assert sorted(r["phase"] for r in phases if r["nct_id"] == "NCT00000001") == ["PHASE1", "PHASE2"]
     locs = _read(con, tmp_path / "out", "study_locations")
     assert {r["country"] for r in locs if r["nct_id"] == "NCT00000003"} == {"France", "Germany"}
+
+
+def test_transform_full_page_fits_lambda_memory(tmp_path):
+    base = load_studies()
+    studies = []
+    for i in range(1000):
+        s = json.loads(json.dumps(base[i % len(base)]))
+        s["protocolSection"]["identificationModule"]["nctId"] = f"NCT9{i:07d}"
+        studies.append(s)
+    src = tmp_path / "page.ndjson"
+    src.write_bytes(ndjson(studies))
+
+    c = duckdb.connect(config={"memory_limit": "512MB", "threads": 2})
+    try:
+        counts = transform_file(c, src, tmp_path / "out", "page_0001")
+    finally:
+        c.close()
+    assert counts["studies"] == 1000
