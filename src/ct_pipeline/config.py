@@ -10,6 +10,8 @@ CURATED_PREFIX = "curated/"
 CURRENT_KEY = "curated/CURRENT.json"
 WATERMARK_KEY = "state/watermark.json"
 OVERVIEW_KEY = "data/overview.json"
+REFERENCE_PREFIX = "reference/"
+REFERENCE_CURRENT_KEY = "reference/CURRENT.json"
 
 
 def _env(name: str, default: str = "") -> str:

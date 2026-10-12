@@ -1,0 +1,5 @@
+# Curated rules on normalised free-text condition names (lower-case, non-alphanumerics → single spaces).
+# pattern must match the whole normalised name (RE2 / Python re compatible). Codes are validated against ICD-10-CM.
+pattern,icd10cm,match_type,note
+(normal )?healthy( (normal|adult|adults|male|males|female|females|japanese|chinese|caucasian|korean|elderly|older|young|participant|participants|volunteer|volunteers|subject|subjects|individual|individuals|men|women|people|person|persons|control|controls|study|population|hs|hv|and|or))*,Z00.6,exact,Healthy volunteers: examination for normal comparison and control in clinical research
+"(.* )?(in|of) healthy( [a-z0-9]+){0,4}",Z00.6,exact,"PK/safety/food-effect etc. ""in healthy volunteers"""

@@ -36,6 +36,10 @@ Parameters:
     MinValue: 1024
     MaxValue: 10240
     Description: Build Lambda memory in MB. 3008 is the maximum on new AWS accounts; DuckDB spills to /tmp beyond it. Use 6144+ for faster all-phases builds if your account allows it.
+  ReferenceSchedule:
+    Type: String
+    Default: "cron(0 3 2 * ? *)"
+    Description: EventBridge schedule for refreshing condition-coding reference data (ICD-10-CM, crosswalks) and recoding the current snapshot.
   QueryReservedConcurrency:
     Type: Number
     Default: 0
@@ -182,6 +186,30 @@ Resources:
                 - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}"
                 - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*"
 
+  ReferenceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ct_pipeline.handlers.reference_handler
+      Description: Refresh ICD-10-CM + MeSH crosswalk reference data, then recode the current snapshot
+      Timeout: 900
+      MemorySize: !Ref BuildMemorySize
+      EphemeralStorage: { Size: 10240 }
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref DataBucket }
+        - S3CrudPolicy: { BucketName: !Ref SiteBucket }
+        - Statement:
+            - Effect: Allow
+              Action: [glue:GetDatabase, glue:GetTable, glue:CreateTable, glue:UpdateTable]
+              Resource:
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*"
+      Events:
+        Monthly:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ReferenceSchedule
+
   QueryFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -317,6 +345,8 @@ Outputs:
     Value: !Ref SiteBucket
   StateMachineArn:
     Value: !Ref PipelineStateMachine
+  ReferenceFunctionName:
+    Value: !Ref ReferenceFunction
   AthenaWorkGroup:
     Value: !Ref AthenaWorkGroup
   GlueDatabase:

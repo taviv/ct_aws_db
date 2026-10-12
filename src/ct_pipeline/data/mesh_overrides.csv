@@ -1,0 +1,99 @@
+# Curated condition MeSH → ICD-10-CM where MONDO/Wikidata have no mapping. Always preferred over crosswalks.
+# Picked from the most frequent unmapped condition MeSH terms in Phase 1 studies; review clinically before relying on them.
+# match_type: exact = same concept; broad = the code is broader than (or a typical reading of) the MeSH concept.
+mesh_id,mesh_term,icd10cm,match_type
+D001943,Breast Neoplasms,C50,broad
+D015179,Colorectal Neoplasms,C18,broad
+D015179,Colorectal Neoplasms,C19,broad
+D015179,Colorectal Neoplasms,C20,broad
+D009362,Neoplasm Metastasis,C79.9,broad
+D008545,Melanoma,C43,broad
+D010190,Pancreatic Neoplasms,C25,broad
+D013274,Stomach Neoplasms,C16,broad
+D000077195,Squamous Cell Carcinoma of Head and Neck,C76.0,broad
+D008175,Lung Neoplasms,C34,broad
+D008228,"Lymphoma, Non-Hodgkin",C85.9,exact
+D005909,Glioblastoma,C71,broad
+D064726,Triple Negative Breast Neoplasms,C50,broad
+D064726,Triple Negative Breast Neoplasms,Z17.1,broad
+D002292,"Carcinoma, Renal Cell",C64,broad
+D009190,Myelodysplastic Syndromes,D46,exact
+D016393,"Lymphoma, B-Cell",C85.1,exact
+D054198,Precursor Cell Lymphoblastic Leukemia-Lymphoma,C91.0,exact
+D006258,Head and Neck Neoplasms,C76.0,broad
+D050177,Overweight,E66.3,exact
+D055752,Small Cell Lung Carcinoma,C34,broad
+D002583,Uterine Cervical Neoplasms,C53,broad
+D019337,Hematologic Neoplasms,C96.9,broad
+D016889,Endometrial Neoplasms,C54.1,broad
+D005910,Glioma,C71,broad
+D001749,Urinary Bladder Neoplasms,C67,broad
+D004938,Esophageal Neoplasms,C15,broad
+D010146,Pain,R52,exact
+D003110,Colonic Neoplasms,C18,broad
+D065626,Non-alcoholic Fatty Liver Disease,K76.0,exact
+D008113,Liver Neoplasms,C22,broad
+D005185,Fallopian Tube Neoplasms,C57.0,broad
+D018352,Coronavirus Infections,B34.2,exact
+D020370,"Osteoarthritis, Knee",M17,exact
+D002277,Carcinoma,C80.1,broad
+D019694,"Hepatitis B, Chronic",B18.1,broad
+D012004,Rectal Neoplasms,C20,broad
+D060825,Cognitive Dysfunction,G31.84,exact
+D020521,Stroke,I63.9,broad
+D009447,Neuroblastoma,C74.9,broad
+D007680,Kidney Neoplasms,C64,broad
+D010149,"Pain, Postoperative",G89.18,exact
+D000077277,Esophageal Squamous Cell Carcinoma,C15,broad
+D050171,Dyslipidemias,E78.5,broad
+D016399,"Lymphoma, T-Cell",C84.9,broad
+D001661,Biliary Tract Neoplasms,C24.9,broad
+D012516,Osteosarcoma,C41.9,broad
+D000230,Adenocarcinoma,C80.1,broad
+D000077216,Carcinoma; Ovarian Epithelial,C56,broad
+D000083242,Ischemic Stroke,I63.9,exact
+D054218,Precursor T-Cell Lymphoblastic Leukemia-Lymphoma,C91.0,exact
+D000086002,"Mesothelioma, Malignant",C45,exact
+D001254,Astrocytoma,C71,broad
+D015212,Inflammatory Bowel Diseases,K50,broad
+D015212,Inflammatory Bowel Diseases,K51,broad
+D012512,"Sarcoma, Ewing",C41.9,broad
+D016543,Central Nervous System Neoplasms,C72.9,broad
+D000098943,Uveal Melanoma,C69,broad
+D008268,Macular Degeneration,H35.3,exact
+D006509,Hepatitis B,B19.1,broad
+D008181,Lupus Nephritis,M32.14,exact
+D016410,"Lymphoma, T-Cell, Cutaneous",C84.A,exact
+D013964,Thyroid Neoplasms,C73,broad
+D000080443,Diffuse Intrinsic Pontine Glioma,C71.7,exact
+D054219,"Neoplasms, Plasma Cell",C90,broad
+D008527,Medulloblastoma,C71.6,exact
+D012208,Rhabdomyosarcoma,C49.9,broad
+D000081029,Pulmonary Arterial Hypertension,I27.0,broad
+D000093284,Non-Muscle Invasive Bladder Neoplasms,C67,broad
+D018805,Sepsis,A41.9,broad
+D000067877,Autism Spectrum Disorder,F84.0,exact
+D012878,Skin Neoplasms,C44,broad
+D004806,Ependymoma,C71,broad
+D048550,Hepatic Insufficiency,K72.9,broad
+D009437,Neuralgia,M79.2,exact
+D001005,Anus Neoplasms,C21,broad
+D006937,Hypercholesterolemia,E78.0,exact
+D016540,Smoking Cessation,F17.2,broad
+D000077192,Adenocarcinoma of Lung,C34,broad
+D018278,"Carcinoma, Neuroendocrine",C7A,broad
+D000070642,"Brain Injuries, Traumatic",S06.9,broad
+D033461,Hyperuricemia,E79.0,exact
+D001289,Attention Deficit Disorder with Hyperactivity,F90,exact
+D003586,Cytomegalovirus Infections,B25,exact
+D011618,Psychotic Disorders,F29,broad
+D009837,Oligodendroglioma,C71,broad
+D059787,Acute Pain,G89.1,exact
+D011008,Pneumococcal Infections,B95.3,broad
+D058729,Peripheral Arterial Disease,I73.9,exact
+D010534,Peritoneal Neoplasms,C48.2,broad
+D055756,Meningeal Carcinomatosis,C79.32,exact
+D020528,"Multiple Sclerosis, Chronic Progressive",G35,broad
+D009477,"Hereditary Sensory and Autonomic Neuropathies",G60.8,broad
+D000257,Adenoviridae Infections,B34.0,exact
+D000092122,Bronchiolitis Obliterans Syndrome,J44.81,exact

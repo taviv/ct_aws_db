@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ct_pipeline import fetch  # noqa: E402
 from ct_pipeline.build import build_snapshot  # noqa: E402
-from ct_pipeline.config import Settings  # noqa: E402
+from ct_pipeline.config import REFERENCE_CURRENT_KEY, Settings  # noqa: E402
+from ct_pipeline.reference import build_reference  # noqa: E402
 from ct_pipeline.storage import open_store  # noqa: E402
 from ct_pipeline.transform import transform_page  # noqa: E402
 
@@ -33,6 +34,11 @@ def main() -> None:
     ap.add_argument("--start-year", help="override CT_START_YEAR")
     ap.add_argument("--page-size", type=int)
     ap.add_argument("--max-pages", type=int, default=0, help="stop after N pages (0 = all)")
+    ap.add_argument(
+        "--reference",
+        action="store_true",
+        help="refresh condition-coding reference data first (downloaded automatically if missing)",
+    )
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -49,6 +55,8 @@ def main() -> None:
     store, site = open_store(settings.data_uri), open_store(settings.site_uri)
 
     t0 = time.time()
+    if args.reference or store.get_json(REFERENCE_CURRENT_KEY) is None:
+        build_reference(store, settings.work_dir)
     state = fetch.start({"mode": args.mode}, settings, store)
     while not state["done"]:
         state = fetch.fetch_page(state, settings, store)

@@ -21,6 +21,7 @@ from .storage import Store
 
 PASS, WARN, FAIL, ERROR = "PASS", "WARN", "FAIL", "ERROR"
 MAX_AGE_DAYS = 8
+MIN_CODED_SHARE = 0.5
 SOURCE_TOLERANCE = 0.01
 SPOT_FIELDS = "NCTId,BriefTitle,OverallStatus,StartDate,CompletionDate,Phase,LastUpdatePostDate"
 PAUSE = MIN_REQUEST_INTERVAL
@@ -129,6 +130,24 @@ def check_orphans(con, tables):
         if n:
             bad.append(f"{table}: {n:,}")
     return (FAIL, "rows without a study: " + "; ".join(bad)) if bad else (PASS, "every child row has a study")
+
+
+def check_condition_codes(con, current):
+    if "study_condition_codes" not in current["tables"]:
+        return WARN, "no study_condition_codes yet - run `make reference`"
+    total, coded, no_chapter = con.execute("""
+        SELECT (SELECT count(*) FROM studies),
+               count(DISTINCT nct_id),
+               count(*) FILTER (WHERE icd10_chapter IS NULL)
+        FROM study_condition_codes WHERE code_system = 'ICD10CM'
+    """).fetchone()
+    share = coded / total if total else 0
+    detail = (
+        f"{coded:,} of {total:,} studies ({share:.0%}) have an ICD-10-CM code, ref {current.get('reference_version')}"
+    )
+    if no_chapter:
+        return FAIL, f"{no_chapter:,} ICD-10-CM rows without a chapter; {detail}"
+    return (PASS if share >= MIN_CODED_SHARE else WARN), detail
 
 
 def check_durations(con):
@@ -254,6 +273,7 @@ def run_checks(
                 run("Start year filter", check_start_year, con, start_year)
             run("Orphan rows", check_orphans, con, list(current["tables"]))
             run("Durations", check_durations, con)
+            run("Condition codes", check_condition_codes, con, current)
             if dashboard_url:
                 run("Dashboard overview", check_overview, con, http, dashboard_url, current)
                 run("Dashboard API", check_api, con, http, dashboard_url)
