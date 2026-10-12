@@ -1,11 +1,12 @@
-"""Lambda entry points (one code package, four functions)."""
+"""Lambda entry points (one code package, five functions)."""
 
 import logging
 
 from . import fetch
-from .build import build_snapshot
-from .config import Settings
+from .build import build_snapshot, recode_snapshot
+from .config import CURRENT_KEY, Settings
 from .query_api import lambda_handler as query_handler  # noqa: F401
+from .reference import build_reference
 from .storage import open_store
 from .transform import transform_page
 
@@ -44,3 +45,21 @@ def build_handler(event, context):
         event["fetch_started_at"],
         glue_client=glue,
     )
+
+
+def reference_handler(event, context):
+    """Refresh reference/<version>/ and, unless {"recode": false}, recode the current snapshot with it."""
+    import boto3
+
+    settings = Settings.from_env()
+    store = open_store(settings.data_uri)
+    pointer = build_reference(store, settings.work_dir)
+    result = {"reference_version": pointer["version"], "row_counts": pointer["row_counts"]}
+    if (event or {}).get("recode", True) and store.get_json(CURRENT_KEY) is not None:
+        result["recode"] = recode_snapshot(
+            settings,
+            store,
+            open_store(settings.site_uri) if settings.site_uri else None,
+            glue_client=boto3.client("glue") if settings.glue_database else None,
+        )
+    return result

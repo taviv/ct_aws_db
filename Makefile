@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -45,6 +45,10 @@ backfill:
 
 run:
 	aws stepfunctions start-execution --state-machine-arn $(call out,StateMachineArn) --input '{"mode":"incremental"}'
+
+## Refresh condition-coding reference data (ICD-10-CM, MeSH crosswalks) and recode the current snapshot
+reference:
+	aws lambda invoke --function-name $(call out,ReferenceFunctionName) --cli-read-timeout 900 --payload '{}' /tmp/ct-reference.json >/dev/null && cat /tmp/ct-reference.json && echo
 
 ## Data integrity checks against the live stack (README: "Verifying the data")
 VERIFY_PY := $(shell command -v python$(RUNTIME) || echo $(PY))

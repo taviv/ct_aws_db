@@ -73,6 +73,36 @@ All tables are keyed by `nct_id`. One row per study in `studies` and `study_text
 | `study_locations` | facility, status, city, state, country, zip, latitude/longitude |
 | `study_sponsors` | lead sponsor and collaborators (`sponsor_type`, name, class) |
 | `condition_mesh_terms`, `intervention_mesh_terms` | MeSH terms and ancestors from `derivedSection` |
+| `study_condition_codes` | structured condition codes (ICD-10-CM, ICD-11, MONDO, UMLS CUI) per study, with `via`, `match_type`, `source`, ICD-10 chapter/block/category and `ref_version` (see below) |
+
+### Condition codes
+
+ClinicalTrials.gov publishes no ICD codes, only free-text conditions and the MeSH terms it derives from them.
+`study_condition_codes` is computed during Build from those plus versioned reference data:
+
+| `via` | Meaning |
+|---|---|
+| `mesh` | one of the study's condition MeSH terms maps to the code |
+| `text` | a curated rule matches a free-text condition name (e.g. "Healthy Volunteers" → `Z00.6`) |
+| `mesh_ancestor` | fallback when the study has no ICD-10-CM code otherwise: the most specific code reachable from a MeSH ancestor (`match_type = 'broad'`) |
+
+`match_type` is `exact` (same concept) or `broad` (the code is broader than the condition). Crosswalk
+sources, best first: curated overrides (`src/ct_pipeline/data/mesh_overrides.csv`), MONDO (CC BY 4.0),
+Wikidata (CC0). ICD-10-CM itself (CMS, public domain) is downloaded for the current fiscal year, and every
+ICD-10-CM code is validated against it.
+
+The Reference function (`make reference`, also monthly) writes `reference/<version>/{icd10cm_codes,
+condition_code_map,condition_text_rules}` plus `reference/CURRENT.json`, then republishes the current snapshot
+with recomputed codes (run id `<timestamp>-recode`), so no refetch is needed. Reference tables are also
+registered in Glue for Athena:
+
+```sql
+SELECT c.icd10_chapter, i.chapter_title, count(DISTINCT c.nct_id) AS studies
+FROM study_condition_codes c JOIN icd10cm_codes i ON i.code = c.code
+WHERE c.code_system = 'ICD10CM' GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+
+To add a mapping, edit the curated CSVs and redeploy, then `make reference`.
 
 ## Deploy
 
@@ -145,6 +175,7 @@ SELECT * FROM read_parquet('s3://<data-bucket>/curated/<run_id>/studies/data.par
 | Start year filter | no study starts before `StartYear` |
 | Orphan rows | every child-table row has a study |
 | Durations | no completion date before the start date (WARN only: that is how the source has it) |
+| Condition codes | `study_condition_codes` exists, every ICD-10-CM row has a chapter, and at least 50% of studies are coded (WARN below that) |
 | Dashboard overview / API | `data/overview.json` and `api/query` serve the current run with the same numbers as the snapshot |
 | Spot check vs source | title, status, start/completion dates and phases of 20 random studies equal the API's (studies updated since the snapshot are skipped) |
 

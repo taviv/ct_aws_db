@@ -4,13 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from ct_pipeline import verify
+from ct_pipeline import reference, verify
 from ct_pipeline.config import CURRENT_KEY, OVERVIEW_KEY
 from ct_pipeline.fetch import API_BASE_URL
 from ct_pipeline.verify import FAIL, PASS, WARN, run_checks
 
 from .conftest import make_study
 from .test_build import _run
+from .test_reference import curated, fake_get  # noqa: F401
 
 DASH = "https://dash.example/"
 
@@ -73,7 +74,9 @@ def _checks(settings, store, site_store, source, start_year="", **http_kw):
     return {c.name: c for c in checks}
 
 
-def test_consistent_snapshot_passes_every_check(settings, store, site_store):
+def test_consistent_snapshot_passes_every_check(settings, store, site_store, curated, monkeypatch):  # noqa: F811
+    reference.build_reference(store, settings.work_dir, get=fake_get())
+    monkeypatch.setattr(verify, "MIN_CODED_SHARE", 0)
     changed = make_study("NCT2", status="COMPLETED", updated="2025-01-01")
     checks = _checks(settings, store, site_store, [changed if s is STUDIES[1] else s for s in STUDIES], "2020")
     assert {name: c.status for name, c in checks.items()} == dict.fromkeys(checks, PASS), checks
@@ -119,3 +122,8 @@ def test_old_snapshot_and_negative_durations_warn(settings, store, site_store):
     checks = run_checks(store, "q", sample=0, http=FakeHttp(studies, site_store), now=created + timedelta(days=9))
     by_name = {c.name: c.status for c in checks}
     assert by_name["Snapshot freshness"] == WARN and by_name["Durations"] == WARN
+
+
+def test_condition_codes_warn_until_reference_exists():
+    status, detail = verify.check_condition_codes(None, {"tables": {"studies": "k"}})
+    assert status == WARN and "make reference" in detail
