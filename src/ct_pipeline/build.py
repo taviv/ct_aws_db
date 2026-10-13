@@ -71,7 +71,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
     """
     study_condition_codes, one row per (study, code system, code, evidence):
       via='mesh'          the study's own condition MeSH term maps to the code
-      via='text'          a curated rule matches a free-text condition name (e.g. healthy volunteers → Z00.6)
+      via='text'          a curated rule matches a free-text condition name (e.g. healthy volunteers → Z00.6),
+                          or the normalized name is in condition_text_map (UMLS)
       via='mesh_ancestor' fallback for studies with no ICD-10-CM code yet: the most specific code reachable
                           from a MeSH ancestor; always match_type='broad'
     Expects study_conditions and condition_mesh_terms views (attach_snapshot).
@@ -97,9 +98,17 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             JOIN {ref["condition_text_rules"]} r
               ON regexp_full_match(trim(regexp_replace(lower(c.condition_name), '[^a-z0-9]+', ' ', 'g')), r.pattern)
         ),
+        text_map AS (
+            SELECT DISTINCT c.nct_id, m.code_system, m.code, m.label, 'text' AS via, NULL::VARCHAR AS mesh_id,
+                   NULL::VARCHAR AS mesh_term, c.condition_name, m.match_type, m.source
+            FROM study_conditions c
+            JOIN {ref["condition_text_map"]} m
+              ON m.condition_norm = trim(regexp_replace(lower(c.condition_name), '[^a-z0-9]+', ' ', 'g'))
+        ),
         coded AS (
             SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'
             UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM'
+            UNION SELECT nct_id FROM text_map WHERE code_system = 'ICD10CM'
         ),
         ancestor AS (
             SELECT DISTINCT t.nct_id, m.code_system, m.code, m.label, 'mesh_ancestor' AS via, t.mesh_id,
@@ -115,7 +124,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             QUALIFY specificity = max(specificity) OVER (PARTITION BY nct_id)
         ),
         coded_all AS (
-            SELECT * FROM direct UNION ALL SELECT * FROM text UNION ALL SELECT * FROM best_ancestor
+            SELECT * FROM direct UNION ALL SELECT * FROM text UNION ALL SELECT * FROM text_map
+            UNION ALL SELECT * FROM best_ancestor
         )
         SELECT a.nct_id, a.code_system, a.code, coalesce(i.description, a.label) AS label,
                i.chapter AS icd10_chapter, i.block AS icd10_block, i.category AS icd10_category,

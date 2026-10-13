@@ -83,16 +83,17 @@ ClinicalTrials.gov publishes no ICD codes, only free-text conditions and the MeS
 | `via` | Meaning |
 |---|---|
 | `mesh` | one of the study's condition MeSH terms maps to the code |
-| `text` | a curated rule matches a free-text condition name (e.g. "Healthy Volunteers" → `Z00.6`) |
+| `text` | a curated rule matches a free-text condition name (e.g. "Healthy Volunteers" → `Z00.6`), or UMLS maps the normalised name to exactly one concept with an ICD-10-CM code |
 | `mesh_ancestor` | fallback when the study has no ICD-10-CM code otherwise: the most specific code reachable from a MeSH ancestor (`match_type = 'broad'`) |
 
 `match_type` is `exact` (same concept) or `broad` (the code is broader than the condition). Crosswalk
-sources, best first: curated overrides (`src/ct_pipeline/data/mesh_overrides.csv`), MONDO (CC BY 4.0),
-Wikidata (CC0). ICD-10-CM itself (CMS, public domain) is downloaded for the current fiscal year, and every
+sources, best first: curated overrides (`src/ct_pipeline/data/mesh_overrides.csv`), UMLS (MeSH and ICD-10-CM
+sharing a concept), MONDO (CC BY 4.0), Wikidata (CC0), then UMLS via SNOMED CT and NLM's SNOMED CT → ICD-10-CM
+map (`broad`). ICD-10-CM itself (CMS, public domain) is downloaded for the current fiscal year, and every
 ICD-10-CM code is validated against it.
 
 The Reference function (`make reference`, also monthly) writes `reference/<version>/{icd10cm_codes,
-condition_code_map,condition_text_rules}` plus `reference/CURRENT.json`, then republishes the current snapshot
+condition_code_map,condition_text_map,condition_text_rules}` plus `reference/CURRENT.json`, then republishes the current snapshot
 with recomputed codes (run id `<timestamp>-recode`), so no refetch is needed. Reference tables are also
 registered in Glue for Athena:
 
@@ -103,6 +104,15 @@ WHERE c.code_system = 'ICD10CM' GROUP BY 1, 2 ORDER BY 3 DESC;
 ```
 
 To add a mapping, edit the curated CSVs and redeploy, then `make reference`.
+
+**UMLS (optional).** With a [UMLS licence](https://uts.nlm.nih.gov/uts/signup-login), store your API key in
+Secrets Manager as `ct-pipeline/umls-api-key` (stack parameter `UmlsSecretName`); without it the UMLS sources
+are skipped. `make umls-coverage` measures what UMLS adds to the current snapshot without publishing anything.
+The Reference function then looks up each condition MeSH term and repeated condition name through the UMLS
+REST API, caching results for 180 days in `reference/umls_cache.json`; lookups that don't fit in one run
+resume on the next. UMLS and SNOMED CT content is licensed: it stays in the private data bucket, and
+only the derived ICD-10-CM codes (public domain) appear in `study_condition_codes`. For local runs, set
+`UMLS_API_KEY` in the environment.
 
 ## Deploy
 

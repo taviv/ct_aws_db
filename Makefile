@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -49,6 +49,12 @@ run:
 ## Refresh condition-coding reference data (ICD-10-CM, MeSH crosswalks) and recode the current snapshot
 reference:
 	aws lambda invoke --function-name $(call out,ReferenceFunctionName) --cli-read-timeout 900 --payload '{}' /tmp/ct-reference.json >/dev/null && cat /tmp/ct-reference.json && echo
+
+## Measure what the UMLS layer adds (needs the UmlsSecretName secret); only writes the UMLS lookup cache
+umls-coverage:
+	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
+	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
+	.verify-venv/bin/python scripts/umls_coverage.py --stack $(STACK)
 
 ## Data integrity checks against the live stack (README: "Verifying the data")
 VERIFY_PY := $(shell command -v python$(RUNTIME) || echo $(PY))

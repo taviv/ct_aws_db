@@ -36,6 +36,10 @@ Parameters:
     MinValue: 1024
     MaxValue: 10240
     Description: Build Lambda memory in MB. 3008 is the maximum on new AWS accounts; DuckDB spills to /tmp beyond it. Use 6144+ for faster all-phases builds if your account allows it.
+  UmlsSecretName:
+    Type: String
+    Default: ct-pipeline/umls-api-key
+    Description: Secrets Manager secret holding your UMLS API key (plain string). If it doesn't exist, the UMLS layer is skipped.
   ReferenceSchedule:
     Type: String
     Default: "cron(0 3 2 * ? *)"
@@ -175,10 +179,16 @@ Resources:
       Timeout: 900
       MemorySize: !Ref BuildMemorySize
       EphemeralStorage: { Size: 10240 }
+      Environment:
+        Variables:
+          CT_UMLS_SECRET_NAME: !Ref UmlsSecretName
       Policies:
         - S3CrudPolicy: { BucketName: !Ref DataBucket }
         - S3CrudPolicy: { BucketName: !Ref SiteBucket }
         - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${UmlsSecretName}-*"
             - Effect: Allow
               Action: [glue:GetDatabase, glue:GetTable, glue:CreateTable, glue:UpdateTable]
               Resource:
