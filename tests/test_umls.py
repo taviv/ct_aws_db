@@ -233,12 +233,18 @@ def test_failed_lookups_are_counted_skipped_and_retried(store):
     assert info["cached"] == 2 and info["fetched"] == 2  # only the failed ones are retried
 
 
-def test_all_lookups_failing_aborts():
+def test_all_lookups_failing_aborts(store):
     def forbidden(url, headers=None):
         raise RuntimeError(f"GET {url} → HTTP 403")
 
-    from ct_pipeline.storage import LocalStore
-
     with pytest.raises(U.UmlsError, match="All of the first 2 UMLS lookups failed.*HTTP 403") as e:
-        U.lookup(U.UmlsClient(KEY, forbidden), LocalStore("/tmp/ct-umls-test-store"), ["D1"], [])
+        U.lookup(U.UmlsClient(KEY, forbidden), store, ["D1"], [])
     assert KEY not in str(e.value)
+
+
+def test_client_rate_limit():
+    client = U.UmlsClient(KEY, FakeUts(), rate=20)
+    t0 = time.monotonic()
+    for _ in range(5):
+        client.crosswalk("D1", "ICD10CM")
+    assert time.monotonic() - t0 >= 4 / 20

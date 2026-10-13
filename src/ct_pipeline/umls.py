@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import re
+import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -25,7 +26,8 @@ UTS = "https://uts-ws.nlm.nih.gov"
 SNOMED_MAP_RELEASES = f"{UTS}/releases?releaseType=snomed-ct-to-icd-10-cm-mapping-resources&current=true"
 CACHE_KEY = "reference/umls_cache.json"
 CACHE_TTL_DAYS = 180
-WORKERS = 5  # UTS allows ~20 requests/second per client
+WORKERS = 5
+RATE = 10  # requests/second across all workers; NLM allows at most 20 per IP and stops serving above that
 CHUNK = 200
 MIN_TEXT_COUNT = 2
 DEFAULT_MAP_RULES = ("TRUE", "OTHERWISE TRUE")
@@ -46,13 +48,25 @@ def _obsolete(r: dict) -> bool:
 
 
 class UmlsClient:
-    def __init__(self, api_key: str, get):
+    def __init__(self, api_key: str, get, rate: float = RATE):
         if not api_key:
             raise ValueError("UMLS API key is empty")
         self._key = api_key
         self._get = get
+        self._rate = rate
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def _throttle(self):
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next)
+            self._next = start + 1 / self._rate
+        if start > now:
+            time.sleep(start - now)
 
     def _fetch(self, url: str, params: dict):
+        self._throttle()
         try:
             return self._get(f"{url}?{urlencode({**params, 'apiKey': self._key})}")
         except Exception as e:
@@ -148,7 +162,7 @@ def lookup(client, store, mesh_ids, texts, deadline=None, today=None, progress=N
     stale = (today - timedelta(days=CACHE_TTL_DAYS)).isoformat()
     todo = [k for k in jobs if k not in cache or cache[k]["at"] < stale]
     done, complete, errors = 0, True, {}
-    cached_before = len(cache) - len(todo) + sum(k in cache for k in todo)
+    fresh_cached = len(cache) - sum(k in cache for k in todo)
 
     def run(key):
         fn, *args = jobs[key]
@@ -176,7 +190,7 @@ def lookup(client, store, mesh_ids, texts, deadline=None, today=None, progress=N
                         errors.setdefault(kind, {}).setdefault(str(err.status or "error"), 0)
                         errors[kind][str(err.status or "error")] += 1
                         failed.append(err)
-                if i == 0 and failed and len(failed) == len(chunk) and not cached_before:  # bad key/licence
+                if i == 0 and failed and len(failed) == len(chunk) and not fresh_cached:  # key/licence/access problem
                     raise UmlsError(f"All of the first {len(chunk)} UMLS lookups failed, e.g. {failed[0]}")
                 if failed:
                     logger.warning("%d UMLS lookups failed in this batch, e.g. %s", len(failed), failed[0])
