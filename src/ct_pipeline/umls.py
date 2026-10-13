@@ -197,7 +197,7 @@ def lookup(client, store, mesh_ids, texts, deadline=None, today=None, progress=N
                 done += len(chunk)
                 if progress:
                     progress(done, len(todo))
-                if (i // CHUNK) % 10 == 9:
+                if (i // CHUNK) % 5 == 4:
                     save()
     finally:
         save()

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ct_pipeline import fetch  # noqa: E402
 from ct_pipeline.build import build_snapshot  # noqa: E402
 from ct_pipeline.config import REFERENCE_CURRENT_KEY, Settings  # noqa: E402
-from ct_pipeline.reference import build_reference, http_get  # noqa: E402
+from ct_pipeline.reference import build_reference, uts_get  # noqa: E402
 from ct_pipeline.storage import open_store  # noqa: E402
 from ct_pipeline.transform import transform_page  # noqa: E402
 from ct_pipeline.umls import UmlsClient  # noqa: E402
@@ -58,7 +58,7 @@ def main() -> None:
     t0 = time.time()
     if args.reference or store.get_json(REFERENCE_CURRENT_KEY) is None:
         key = os.environ.get("UMLS_API_KEY", "").strip()
-        build_reference(store, settings.work_dir, umls_client=UmlsClient(key, http_get) if key else None)
+        build_reference(store, settings.work_dir, umls_client=UmlsClient(key, uts_get) if key else None)
     state = fetch.start({"mode": args.mode}, settings, store)
     while not state["done"]:
         state = fetch.fetch_page(state, settings, store)

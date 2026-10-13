@@ -25,7 +25,7 @@ from ct_pipeline.reference import (  # noqa: E402
     SCHEMAS,
     combine_maps,
     download_reference,
-    http_get,
+    uts_get,
     valid_text_map,
     write_table,
 )
@@ -47,7 +47,7 @@ def main() -> None:
     outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
     store = S3Store(outputs["DataBucketName"])
     key = boto3.client("secretsmanager").get_secret_value(SecretId=args.secret_name)["SecretString"].strip()
-    client = umls.UmlsClient(key, http_get)
+    client = umls.UmlsClient(key, uts_get)
 
     current = store.get_json(CURRENT_KEY)
     if current is None:

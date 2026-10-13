@@ -7,7 +7,7 @@ from . import fetch
 from .build import build_snapshot, recode_snapshot
 from .config import CURRENT_KEY, Settings
 from .query_api import lambda_handler as query_handler  # noqa: F401
-from .reference import build_reference, http_get
+from .reference import build_reference, uts_get
 from .storage import open_store
 from .transform import transform_page
 from .umls import UmlsClient
@@ -72,7 +72,7 @@ def reference_handler(event, context):
     settings = Settings.from_env()
     store = open_store(settings.data_uri)
     key = umls_api_key(settings.umls_secret_name)
-    umls_client = UmlsClient(key, http_get) if key else None
+    umls_client = UmlsClient(key, uts_get) if key else None
     # leave ~5 minutes of the 15 for writing the reference and recoding; unfinished lookups resume next run
     deadline = time.monotonic() + context.get_remaining_time_in_millis() / 1000 - 300 if context else None
     pointer = build_reference(store, settings.work_dir, umls_client=umls_client, deadline=deadline)

@@ -93,14 +93,26 @@ _HTTP = urllib3.PoolManager(
 USER_AGENT = "ct-aws-db-reference/1.0 (https://github.com/taviv/ct_aws_db)"
 
 
-def http_get(url: str, headers=None) -> bytes | None:
+def http_get(url: str, headers=None, **request_kw) -> bytes | None:
     """Body for 200, None for 404; raises otherwise."""
-    r = _HTTP.request("GET", url, headers={"User-Agent": USER_AGENT, **(headers or {})}, preload_content=True)
+    r = _HTTP.request(
+        "GET", url, headers={"User-Agent": USER_AGENT, **(headers or {})}, preload_content=True, **request_kw
+    )
     if r.status == 404:
         return None
     if r.status != 200:
         raise RuntimeError(f"GET {url} → HTTP {r.status}")
     return r.data
+
+
+def uts_get(url: str, headers=None) -> bytes | None:
+    """http_get for the UMLS API: fail fast on a stalled request (it is retried on the next run)."""
+    return http_get(
+        url,
+        headers,
+        timeout=urllib3.Timeout(connect=10, read=30),
+        retries=Retry(total=2, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504)),
+    )
 
 
 def normalize_condition(text: str) -> str:

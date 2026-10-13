@@ -208,7 +208,7 @@ def test_umls_coverage_script(settings, store, site_store, curated, monkeypatch,
 
     monkeypatch.setattr(script.boto3, "client", lambda name: Boto())
     monkeypatch.setattr(script, "S3Store", lambda bucket: store)
-    monkeypatch.setattr(script, "http_get", _uts())
+    monkeypatch.setattr(script, "uts_get", _uts())
     monkeypatch.setattr("sys.argv", ["umls_coverage.py"])
     script.main()
     out = capsys.readouterr().out
