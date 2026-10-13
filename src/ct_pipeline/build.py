@@ -72,7 +72,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
     study_condition_codes, one row per (study, code system, code, evidence):
       via='mesh'          the study's own condition MeSH term maps to the code
       via='text'          a curated rule matches a free-text condition name (e.g. healthy volunteers → Z00.6),
-                          or the normalized name is in condition_text_map (UMLS)
+                          or, for studies with no other ICD-10-CM code, the normalized name is in
+                          condition_text_map (UMLS)
       via='mesh_ancestor' fallback for studies with no ICD-10-CM code yet: the most specific code reachable
                           from a MeSH ancestor; always match_type='broad'
     Expects study_conditions and condition_mesh_terms views (attach_snapshot).
@@ -104,6 +105,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             FROM study_conditions c
             JOIN {ref["condition_text_map"]} m
               ON m.condition_norm = trim(regexp_replace(lower(c.condition_name), '[^a-z0-9]+', ' ', 'g'))
+            WHERE c.nct_id NOT IN (SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'
+                                   UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM')
         ),
         coded AS (
             SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'

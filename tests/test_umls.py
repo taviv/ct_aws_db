@@ -185,6 +185,7 @@ def test_build_reference_and_codes_with_umls(settings, store, site_store, curate
         _study("NCT4", ["NSCLC"]),
         _study("NCT5", ["Lung adeno"]),
         _study("NCT6", ["Lung adeno"]),
+        _study("NCT7", ["NSCLC"], meshes=[("D012345", "Breast Thing")]),
     ]
     _build(settings, store, site_store, "R1", studies)
     pointer = R.build_reference(store, settings.work_dir, get=fake_get(), umls_client=U.UmlsClient(KEY, _uts()))
@@ -206,6 +207,7 @@ def test_build_reference_and_codes_with_umls(settings, store, site_store, curate
     assert ("NCT1", "C80.1", "mesh", "umls") in codes and ("NCT2", "C34.11", "mesh", "umls_snomed") in codes
     assert ("NCT3", "C34.1", "text", "umls") in codes and ("NCT4", "C34.1", "text", "umls") in codes
     assert ("NCT5", "C34.11", "text", "umls_snomed") in codes
+    assert {c for c in codes if c[0] == "NCT7"} == {("NCT7", "C80.1", "mesh", "umls")}  # text map only fills gaps
 
 
 def test_reference_without_key_and_old_reference_without_text_map(settings, store, site_store, curated):  # noqa: F811
