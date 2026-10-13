@@ -36,7 +36,9 @@ logging.getLogger("urllib3").setLevel(logging.ERROR)  # urllib3 retry warnings i
 
 
 class UmlsError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 def _obsolete(r: dict) -> bool:
@@ -54,9 +56,11 @@ class UmlsClient:
         try:
             return self._get(f"{url}?{urlencode({**params, 'apiKey': self._key})}")
         except Exception as e:
-            status = re.search(r"HTTP (\d+)", str(e))
-            detail = f"HTTP {status.group(1)}" if status else type(e).__name__
-            raise UmlsError(f"UMLS request to {url.removeprefix(UTS)} failed ({detail})") from None
+            m = re.search(r"HTTP (\d+)", str(e))
+            status = int(m.group(1)) if m else None
+            detail = f"HTTP {status}" if status else type(e).__name__
+            target = f" targetSource={params['targetSource']}" if "targetSource" in params else ""
+            raise UmlsError(f"UMLS request to {url.removeprefix(UTS)}{target} failed ({detail})", status) from None
 
     def _json(self, path: str, **params):
         data = self._fetch(UTS + path, params)
@@ -143,11 +147,15 @@ def lookup(client, store, mesh_ids, texts, deadline=None, today=None, progress=N
     cache = {k: v for k, v in cache.items() if k in jobs}
     stale = (today - timedelta(days=CACHE_TTL_DAYS)).isoformat()
     todo = [k for k in jobs if k not in cache or cache[k]["at"] < stale]
-    done, complete = 0, True
+    done, complete, errors = 0, True, {}
+    cached_before = len(cache) - len(todo) + sum(k in cache for k in todo)
 
     def run(key):
         fn, *args = jobs[key]
-        return key, fn(*args)
+        try:
+            return key, fn(*args), None
+        except UmlsError as e:
+            return key, None, e
 
     def save():
         store.put_json(CACHE_KEY, {"updated_at": datetime.now(timezone.utc).isoformat(), "entries": cache})
@@ -158,16 +166,34 @@ def lookup(client, store, mesh_ids, texts, deadline=None, today=None, progress=N
                 if deadline is not None and time.monotonic() > deadline:
                     complete = False
                     break
-                for key, value in pool.map(run, todo[i : i + CHUNK]):
-                    cache[key] = {"at": today.isoformat(), "v": value}
-                done += len(todo[i : i + CHUNK])
+                chunk = todo[i : i + CHUNK]
+                failed = []
+                for key, value, err in pool.map(run, chunk):
+                    if err is None:
+                        cache[key] = {"at": today.isoformat(), "v": value}
+                    else:  # not cached, so retried next run
+                        kind = key.split(":")[1] if key.startswith("msh:") else "text"
+                        errors.setdefault(kind, {}).setdefault(str(err.status or "error"), 0)
+                        errors[kind][str(err.status or "error")] += 1
+                        failed.append(err)
+                if i == 0 and failed and len(failed) == len(chunk) and not cached_before:  # bad key/licence
+                    raise UmlsError(f"All of the first {len(chunk)} UMLS lookups failed, e.g. {failed[0]}")
+                if failed:
+                    logger.warning("%d UMLS lookups failed in this batch, e.g. %s", len(failed), failed[0])
+                done += len(chunk)
                 if progress:
                     progress(done, len(todo))
                 if (i // CHUNK) % 10 == 9:
                     save()
     finally:
         save()
-    info = {"lookups": len(jobs), "fetched": done, "cached": len(jobs) - len(todo), "complete": complete}
+    info = {
+        "lookups": len(jobs),
+        "fetched": done,
+        "cached": len(jobs) - len(todo),
+        "complete": complete and not errors,
+        "errors": errors,
+    }
     return {k: cache[k]["v"] for k in jobs if k in cache}, info
 
 

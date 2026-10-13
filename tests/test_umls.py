@@ -214,3 +214,31 @@ def test_umls_coverage_script(settings, store, site_store, curated, monkeypatch,
     out = capsys.readouterr().out
     assert "1 → 4 of 4 (25.0% → 100.0%)" in out, out
     assert KEY not in out
+
+
+class ForbiddenSnomed(FakeUts):
+    def __call__(self, url, headers=None):
+        if "targetSource=SNOMEDCT_US" in url:
+            raise RuntimeError(f"GET {url} → HTTP 403")
+        return super().__call__(url, headers)
+
+
+def test_failed_lookups_are_counted_skipped_and_retried(store):
+    client = U.UmlsClient(KEY, ForbiddenSnomed(crosswalk={("D1", "ICD10CM"): ["C50"]}))
+    results, info = U.lookup(client, store, ["D1", "D2"], [])
+    assert results == {"msh:ICD10CM:D1": [["C50", "n C50"]], "msh:ICD10CM:D2": []}
+    assert info["errors"] == {"SNOMEDCT_US": {"403": 2}} and not info["complete"]
+    assert KEY not in json.dumps(info)
+    _, info = U.lookup(client, store, ["D1", "D2"], [])
+    assert info["cached"] == 2 and info["fetched"] == 2  # only the failed ones are retried
+
+
+def test_all_lookups_failing_aborts():
+    def forbidden(url, headers=None):
+        raise RuntimeError(f"GET {url} → HTTP 403")
+
+    from ct_pipeline.storage import LocalStore
+
+    with pytest.raises(U.UmlsError, match="All of the first 2 UMLS lookups failed.*HTTP 403") as e:
+        U.lookup(U.UmlsClient(KEY, forbidden), LocalStore("/tmp/ct-umls-test-store"), ["D1"], [])
+    assert KEY not in str(e.value)

@@ -127,6 +127,8 @@ def main() -> None:
             WHERE nct_id NOT IN (SELECT nct_id FROM codes_after) GROUP BY 1 ORDER BY 2 DESC LIMIT 15
         """).fetchall():
             print(f"  {n:5,}  {name}")
+        if info["errors"]:
+            print(f"\nFailed lookups by target and HTTP status (retried next run): {info['errors']}")
         if not info["complete"]:
             print("\nLookups incomplete; run again to continue.")
         con.close()
