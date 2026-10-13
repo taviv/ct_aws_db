@@ -4,7 +4,9 @@ UMLS layer for condition coding (needs a UMLS licence and API key; ROADMAP.md ph
 Adds to the reference build:
   source='umls'         MeSH descriptor → ICD-10-CM codes sharing its UMLS CUI (UTS crosswalk); exact
   source='umls_snomed'  MeSH → SNOMED CT (shared CUI) → NLM's SNOMED CT to ICD-10-CM map default target; broad
-  condition_text_map    normalized free-text condition → the single UMLS concept it names → ICD-10-CM atoms
+  condition_text_map    normalized free-text condition → the single UMLS concept it names → its ICD-10-CM atoms
+                        (umls, exact) or, if it has none, its SNOMED CT atoms → NLM map (umls_snomed, broad)
+Each key's codes are then collapsed to one code (reference.prepare_umls).
 
 UMLS and SNOMED CT content is licensed: these rows and the lookup cache stay in the private data bucket.
 UTS only accepts the API key as a query parameter, so request URLs are never logged or put in errors.
@@ -32,6 +34,7 @@ CHUNK = 200
 MIN_TEXT_COUNT = 2
 DEFAULT_MAP_RULES = ("TRUE", "OTHERWISE TRUE")
 SOURCES = ("umls", "umls_snomed")
+ATOM_SOURCES = ("ICD10CM", "SNOMEDCT_US")
 
 logger = logging.getLogger(__name__)
 logging.getLogger("urllib3").setLevel(logging.ERROR)  # urllib3 retry warnings include the URL (and key)
@@ -85,21 +88,24 @@ class UmlsClient:
         d = self._json(f"/rest/crosswalk/current/source/MSH/{quote(mesh_id)}", targetSource=target, pageSize=200)
         return [[r["ui"], r.get("name")] for r in (d or {}).get("result") or [] if not _obsolete(r)]
 
-    def text_codes(self, text: str) -> list:
-        """[[icd10cm code, name, cui]] when the text names exactly one UMLS concept; [] if none or ambiguous."""
+    def search(self, text: str) -> list:
+        """CUIs of the concepts whose normalized name is `text` (at most 5)."""
         d = self._json(
             "/rest/search/current", string=text, searchType="normalizedString", returnIdType="concept", pageSize=5
         )
         results = ((d or {}).get("result") or {}).get("results") or []
-        cuis = [r["ui"] for r in results if r.get("ui") not in (None, "NONE")]
-        if len(cuis) != 1:
-            return []
-        atoms = self._json(f"/rest/content/current/CUI/{cuis[0]}/atoms", sabs="ICD10CM", pageSize=100)
-        return [
-            [a["code"].rstrip("/").rsplit("/", 1)[-1], a.get("name"), cuis[0]]
-            for a in (atoms or {}).get("result") or []
-            if not _obsolete(a)
-        ]
+        return [r["ui"] for r in results if r.get("ui") not in (None, "NONE")]
+
+    def atoms(self, cui: str) -> list:
+        """[[source, code, name]] for the concept's ICD-10-CM and SNOMED CT atoms (name only for ICD-10-CM)."""
+        d = self._json(f"/rest/content/current/CUI/{cui}/atoms", sabs=",".join(ATOM_SOURCES), pageSize=200)
+        out = []
+        for a in (d or {}).get("result") or []:
+            *_, sab, code = a["code"].rstrip("/").split("/")
+            atom = [sab, code, a.get("name") if sab == "ICD10CM" else None]
+            if sab in ATOM_SOURCES and not _obsolete(a) and atom not in out:
+                out.append(atom)
+        return out
 
     def snomed_icd_map(self) -> tuple:
         """({snomed concept id: [icd10cm code, name]}, release version) from NLM's current map release."""
@@ -151,67 +157,75 @@ def lookup_inputs(con) -> tuple:
 
 def lookup(client, store, mesh_ids, texts, deadline=None, today=None, progress=None) -> tuple:
     """
-    Crosswalk/search results per lookup key, cached in CACHE_KEY for CACHE_TTL_DAYS. Stops starting new
-    lookups after `deadline` (time.monotonic()); the next run continues from the cache.
+    Crosswalk, search and atom results per lookup key, cached in CACHE_KEY for CACHE_TTL_DAYS. Stops starting
+    new lookups after `deadline` (time.monotonic()); the next run continues from the cache.
     """
     today = today or date.today()
-    jobs = {f"msh:{t}:{m}": (client.crosswalk, m, t) for m in mesh_ids for t in ("ICD10CM", "SNOMEDCT_US")}
-    jobs |= {f"text:{t}": (client.text_codes, t) for t in texts}
-    cache = (store.get_json(CACHE_KEY) or {}).get("entries", {})
-    cache = {k: v for k, v in cache.items() if k in jobs}
     stale = (today - timedelta(days=CACHE_TTL_DAYS)).isoformat()
-    todo = [k for k in jobs if k not in cache or cache[k]["at"] < stale]
-    done, complete, errors = 0, True, {}
-    fresh_cached = len(cache) - sum(k in cache for k in todo)
+    cache = (store.get_json(CACHE_KEY) or {}).get("entries", {})
+    fresh = {k for k, v in cache.items() if v["at"] >= stale}
+    keep, errors, stats = set(), {}, {"fetched": 0, "cached": 0, "complete": True}
 
-    def run(key):
-        fn, *args = jobs[key]
+    def run(job):
+        key, (fn, *args) = job
         try:
             return key, fn(*args), None
         except UmlsError as e:
             return key, None, e
 
-    def save():
-        store.put_json(CACHE_KEY, {"updated_at": datetime.now(timezone.utc).isoformat(), "entries": cache})
+    def save(prune=False):
+        entries = {k: v for k, v in cache.items() if k in keep} if prune else cache
+        store.put_json(CACHE_KEY, {"updated_at": datetime.now(timezone.utc).isoformat(), "entries": entries})
+
+    def run_jobs(pool, jobs):
+        keep.update(jobs)
+        todo = [k for k in jobs if k not in fresh]
+        stats["cached"] += len(jobs) - len(todo)
+        had_results = len(todo) < len(jobs)
+        for i in range(0, len(todo), CHUNK):
+            if deadline is not None and time.monotonic() > deadline:
+                stats["complete"] = False
+                return
+            chunk = todo[i : i + CHUNK]
+            failed = []
+            for key, value, err in pool.map(run, [(k, jobs[k]) for k in chunk]):
+                if err is None:
+                    cache[key] = {"at": today.isoformat(), "v": value}
+                    had_results = True
+                else:  # not cached, so retried next run
+                    kind = key.split(":")[1] if key.startswith("msh:") else key.split(":")[0]
+                    errors.setdefault(kind, {}).setdefault(str(err.status or "error"), 0)
+                    errors[kind][str(err.status or "error")] += 1
+                    failed.append(err)
+            if not had_results:  # key/licence/access problem
+                raise UmlsError(f"All of the first {len(chunk)} UMLS lookups failed, e.g. {failed[0]}")
+            if failed:
+                logger.warning("%d UMLS lookups failed in this batch, e.g. %s", len(failed), failed[0])
+            stats["fetched"] += len(chunk)
+            if progress:
+                progress(i + len(chunk), len(todo))
+            if (i // CHUNK) % 5 == 4:
+                save()
 
     try:
         with ThreadPoolExecutor(WORKERS) as pool:
-            for i in range(0, len(todo), CHUNK):
-                if deadline is not None and time.monotonic() > deadline:
-                    complete = False
-                    break
-                chunk = todo[i : i + CHUNK]
-                failed = []
-                for key, value, err in pool.map(run, chunk):
-                    if err is None:
-                        cache[key] = {"at": today.isoformat(), "v": value}
-                    else:  # not cached, so retried next run
-                        kind = key.split(":")[1] if key.startswith("msh:") else "text"
-                        errors.setdefault(kind, {}).setdefault(str(err.status or "error"), 0)
-                        errors[kind][str(err.status or "error")] += 1
-                        failed.append(err)
-                if i == 0 and failed and len(failed) == len(chunk) and not fresh_cached:  # key/licence/access problem
-                    raise UmlsError(f"All of the first {len(chunk)} UMLS lookups failed, e.g. {failed[0]}")
-                if failed:
-                    logger.warning("%d UMLS lookups failed in this batch, e.g. %s", len(failed), failed[0])
-                done += len(chunk)
-                if progress:
-                    progress(done, len(todo))
-                if (i // CHUNK) % 5 == 4:
-                    save()
+            jobs = {f"msh:{t}:{m}": (client.crosswalk, m, t) for m in mesh_ids for t in ("ICD10CM", "SNOMEDCT_US")}
+            run_jobs(pool, jobs | {f"search:{t}": (client.search, t) for t in texts})
+            cuis = {c for t in texts for c in _single(cache.get(f"search:{t}"))}
+            run_jobs(pool, {f"cui:{c}": (client.atoms, c) for c in sorted(cuis)})
     finally:
-        save()
-    info = {
-        "lookups": len(jobs),
-        "fetched": done,
-        "cached": len(jobs) - len(todo),
-        "complete": complete and not errors,
-        "errors": errors,
-    }
-    return {k: cache[k]["v"] for k in jobs if k in cache}, info
+        save(prune=True)
+    info = {"lookups": len(keep), **stats, "errors": errors}
+    info["complete"] = stats["complete"] and not errors
+    return {k: cache[k]["v"] for k in keep if k in cache}, info
 
 
-def umls_rows(results: dict, snomed_map: dict, mesh_ids) -> tuple:
+def _single(entry) -> list:
+    """[cui] if a cached search found exactly one concept, else []."""
+    return entry["v"] if entry and len(entry["v"]) == 1 else []
+
+
+def umls_rows(results: dict, snomed_map: dict, mesh_ids, texts) -> tuple:
     """(condition_code_map rows, condition_text_map rows) from lookup results; codes not yet validated."""
     rows = []
     for m in mesh_ids:
@@ -221,12 +235,19 @@ def umls_rows(results: dict, snomed_map: dict, mesh_ids) -> tuple:
             if concept in snomed_map:
                 code, name = snomed_map[concept]
                 rows.append(_row(mesh_id=m, code=code, label=name, match_type="broad", source="umls_snomed"))
-    text_rows = [
-        _row(condition_norm=key[5:], code=code, label=name, match_type="exact", source="umls")
-        for key, value in results.items()
-        if key.startswith("text:")
-        for code, name, _ in value
-    ]
+    text_rows = []
+    for t in texts:
+        cuis = results.get(f"search:{t}") or []
+        atoms = results.get(f"cui:{cuis[0]}") or [] if len(cuis) == 1 else []
+        icd = [(code, name) for sab, code, name in atoms if sab == "ICD10CM"]
+        for code, name in icd:
+            text_rows.append(_row(condition_norm=t, code=code, label=name, match_type="exact", source="umls"))
+        for concept in [] if icd else sorted({code for sab, code, _ in atoms if sab == "SNOMEDCT_US"}):
+            if concept in snomed_map:
+                code, name = snomed_map[concept]
+                text_rows.append(
+                    _row(condition_norm=t, code=code, label=name, match_type="broad", source="umls_snomed")
+                )
     return rows, text_rows
 
 
@@ -238,7 +259,7 @@ def fetch_umls(client, store, mesh_ids, texts, deadline=None, today=None, progre
     """(condition_code_map rows by source, condition_text_map rows, info) for the given lookup inputs."""
     snomed_map, release = client.snomed_icd_map()
     results, info = lookup(client, store, mesh_ids, texts, deadline, today, progress)
-    rows, text_rows = umls_rows(results, snomed_map, mesh_ids)
+    rows, text_rows = umls_rows(results, snomed_map, mesh_ids, texts)
     by_source = {s: [r for r in rows if r["source"] == s] for s in SOURCES}
     info |= {"snomed_icd10cm_map": release, "snomed_map_concepts": len(snomed_map)}
     if not info["complete"]:

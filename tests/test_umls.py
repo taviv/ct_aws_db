@@ -78,8 +78,11 @@ class FakeUts:
             return json.dumps({"result": {"results": [{"ui": c, "name": c} for c in cuis]}})
         if parts.path.startswith("/rest/content/current/CUI/"):
             codes = self.atoms.get(parts.path.split("/")[5])
-            base = "https://uts-ws.nlm.nih.gov/rest/content/2026AA/source/ICD10CM/"
-            return json.dumps({"result": [{"code": base + c, "name": f"a {c}"} for c in codes]}) if codes else None
+            base = "https://uts-ws.nlm.nih.gov/rest/content/2026AA/source/"
+            result = [
+                {"code": f"{base}{'SNOMEDCT_US' if c.isdigit() else 'ICD10CM'}/{c}", "name": f"a {c}"} for c in codes
+            ]
+            return json.dumps({"result": result}) if codes else None
         raise AssertionError(url)
 
 
@@ -98,10 +101,55 @@ def test_errors_never_contain_the_key(caplog):
     assert KEY not in caplog.text
 
 
-def test_text_codes_skip_ambiguous_strings():
-    client = U.UmlsClient(KEY, FakeUts(search={"nsclc": ["C1"], "aml": ["C2", "C3"]}, atoms={"C1": ["C34.90"]}))
-    assert client.text_codes("nsclc") == [["C34.90", "a C34.90", "C1"]]
-    assert client.text_codes("aml") == [] and client.text_codes("safety") == []
+def test_search_and_atoms():
+    client = U.UmlsClient(KEY, FakeUts(search={"nsclc": ["C1"], "aml": ["C2", "C3"]}, atoms={"C1": ["C34.90", "123"]}))
+    assert client.search("nsclc") == ["C1"] and client.search("aml") == ["C2", "C3"] and client.search("x") == []
+    assert client.atoms("C1") == [["ICD10CM", "C34.90", "a C34.90"], ["SNOMEDCT_US", "123", None]]
+
+
+def test_umls_rows_text_uses_icd_atoms_else_snomed_and_skips_ambiguous():
+    results = {
+        "search:nsclc": ["C1"],
+        "search:her2 bc": ["C2"],
+        "search:aml": ["C3", "C4"],
+        "cui:C1": [["ICD10CM", "C34.90", "n"], ["SNOMEDCT_US", "222", None]],
+        "cui:C2": [["SNOMEDCT_US", "222", None]],
+    }
+    _, text = U.umls_rows(results, {"222": ["C50.919", "t"]}, [], ["nsclc", "her2 bc", "aml"])
+    assert [(r["condition_norm"], r["code"], r["source"], r["match_type"]) for r in text] == [
+        ("nsclc", "C34.90", "umls", "exact"),
+        ("her2 bc", "C50.919", "umls_snomed", "broad"),
+    ]
+
+
+def test_collapse_umls():
+    icd = {"R11", "R11.1", "R11.10", "L64", "L65.9", "T81", "T81.9", "T81.9XXS", "B99.9", "T14", "T14.8", "T14.9"}
+
+    def row(m, code, source="umls"):
+        return {
+            "mesh_id": m,
+            "code_system": "ICD10CM",
+            "code": code,
+            "label": code,
+            "match_type": "exact",
+            "source": source,
+        }
+
+    rows = [
+        row("vomit", "R11.1"), row("vomit", "R11.10"),
+        row("alopecia", "L64"), row("alopecia", "L65.9"),
+        row("postop", "T81.9XXS", "umls_snomed"),
+        row("wound", "B99.9", "umls_snomed"),
+        row("injury", "T14.8"), row("injury", "T14.9"),
+        row("x", "NOPE"),
+    ]  # fmt: skip
+    out, invalid, ambiguous = R.collapse_umls(icd, rows, "mesh_id")
+    assert {(r["mesh_id"], r["code"], r["match_type"]) for r in out} == {
+        ("vomit", "R11.1", "exact"),
+        ("postop", "T81.9", "broad"),
+        ("injury", "T14", "broad"),
+    }
+    assert (invalid, ambiguous) == (1, 2)
 
 
 def test_lookup_caches_and_respects_deadline(store):
@@ -124,8 +172,8 @@ def _uts():
             ("D012345", "ICD10CM"): ["C80.1", "NOT-A-CODE"],
             ("D054321", "SNOMEDCT_US"): ["111"],
         },
-        search={"nsclc": ["C9"]},
-        atoms={"C9": ["C34.1"]},
+        search={"nsclc": ["C9"], "lung adeno": ["C8"]},
+        atoms={"C9": ["C34.1"], "C8": ["111"]},
     )
 
 
@@ -135,6 +183,8 @@ def test_build_reference_and_codes_with_umls(settings, store, site_store, curate
         _study("NCT2", ["Lung thing"], meshes=[("D054321", "Lung Thing")]),
         _study("NCT3", ["NSCLC"]),
         _study("NCT4", ["NSCLC"]),
+        _study("NCT5", ["Lung adeno"]),
+        _study("NCT6", ["Lung adeno"]),
     ]
     _build(settings, store, site_store, "R1", studies)
     pointer = R.build_reference(store, settings.work_dir, get=fake_get(), umls_client=U.UmlsClient(KEY, _uts()))
@@ -155,6 +205,7 @@ def test_build_reference_and_codes_with_umls(settings, store, site_store, curate
     codes = set(duckdb.sql(f"SELECT nct_id, code, via, source FROM read_parquet('{path}')").fetchall())
     assert ("NCT1", "C80.1", "mesh", "umls") in codes and ("NCT2", "C34.11", "mesh", "umls_snomed") in codes
     assert ("NCT3", "C34.1", "text", "umls") in codes and ("NCT4", "C34.1", "text", "umls") in codes
+    assert ("NCT5", "C34.11", "text", "umls_snomed") in codes
 
 
 def test_reference_without_key_and_old_reference_without_text_map(settings, store, site_store, curated):  # noqa: F811

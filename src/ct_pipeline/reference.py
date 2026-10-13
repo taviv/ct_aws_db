@@ -7,8 +7,8 @@ Reference vocabularies for condition coding, versioned under reference/<version>
   condition_text_rules   regex on normalised free-text condition names → code (curated, data/)
   reference/CURRENT.json → the active version
 
-Crosswalk sources, best first: curated overrides (data/mesh_overrides.csv), UMLS (CUI synonymy; needs an
-API key, see umls.py), MONDO SSSOM, Wikidata, UMLS via SNOMED CT. Exact matches beat broad ones.
+Crosswalk sources, best first: curated overrides (data/mesh_overrides.csv), MONDO SSSOM, UMLS (CUI synonymy;
+needs an API key, see umls.py), Wikidata, UMLS via SNOMED CT. Exact matches beat broad ones.
 Every ICD-10-CM code is validated against the CMS code list; invalid codes are dropped and counted.
 """
 
@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -45,7 +46,9 @@ MONDO_SSSOM_URL = (
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIDATA_PROPERTIES = {"ICD10CM": "P4229", "ICD11": "P7807"}
 
-SOURCE_PRIORITY = ("curated", "umls", "mondo", "wikidata", "umls_snomed")
+SOURCE_PRIORITY = ("curated", "mondo", "umls", "wikidata", "umls_snomed")
+# catch-all codes the SNOMED CT map defaults to; they say nothing about the condition
+NONSPECIFIC_ICD10CM = frozenset({"B99", "B99.8", "B99.9", "R68.8", "R68.89", "R69"})
 MATCH_TYPES = ("exact", "broad")
 
 SCHEMAS = {
@@ -392,6 +395,61 @@ def snapshot_lookup_inputs(store, work: Path) -> tuple:
         con.close()
 
 
+def strip_extension(code: str) -> str:
+    """'T81.9XXS' → 'T81.9': drop an ICD-10-CM 7th character (encounter/sequela) and its X placeholders."""
+    return code[:-1].rstrip("X").rstrip(".") if len(code.replace(".", "")) == 7 else code
+
+
+def common_code(codes: set, icd_codes: set) -> str | None:
+    """The most specific valid code covering all `codes` within one category; None if they span categories."""
+    if len({c[:3] for c in codes}) != 1:
+        return None
+    code = os.path.commonprefix(sorted(codes)).rstrip(".")
+    while code not in icd_codes and len(code) > 3:
+        code = code[:-1].rstrip(".")
+    return code if code in icd_codes else None
+
+
+def collapse_umls(icd_codes: set, rows: list, key: str) -> tuple:
+    """
+    One code per (key, source): UMLS returns every code sharing a concept (Vomiting → R11.1, R11.10) and
+    some that only share an index term (Alopecia → L64, L65.9, L66.0). Codes within one category collapse to
+    their common parent; codes across categories, or catch-alls like B99.9, are dropped as ambiguous.
+    Returns (rows, invalid count, ambiguous count).
+    """
+    groups, invalid = {}, 0
+    for r in rows:
+        code = normalize_icd10cm(r["code"])
+        if code not in icd_codes:
+            invalid += 1
+            continue
+        groups.setdefault((r[key], r["source"]), []).append({**r, "code": strip_extension(code), "orig": code})
+    out, ambiguous = [], 0
+    for group in groups.values():
+        code = common_code({r["code"] for r in group}, icd_codes)
+        if code is None or code in NONSPECIFIC_ICD10CM:
+            ambiguous += 1
+            continue
+        same = [r for r in group if r["orig"] == code]
+        r = same[0] if same else {**group[0], "code": code, "label": None, "match_type": "broad"}
+        out.append({k: v for k, v in r.items() if k != "orig"})
+    return out, invalid, ambiguous
+
+
+def prepare_umls(icd_codes: set, maps: dict, text_rows: list) -> tuple:
+    """(code map rows by source, text map rows, {dropped_invalid, dropped_ambiguous}) with collapse_umls applied."""
+    info = {"dropped_invalid": {}, "dropped_ambiguous": {}}
+    out = {}
+    for source, rows in maps.items():
+        out[source], info["dropped_invalid"][source], info["dropped_ambiguous"][source] = collapse_umls(
+            icd_codes, rows, "mesh_id"
+        )
+    text_rows, info["dropped_invalid"]["umls_text"], info["dropped_ambiguous"]["umls_text"] = collapse_umls(
+        icd_codes, text_rows, "condition_norm"
+    )
+    return out, text_rows, info
+
+
 def valid_text_map(icd_codes: set, rows: list) -> tuple:
     """(condition_text_map rows with valid, normalized ICD-10-CM codes, deduplicated; dropped invalid count)."""
     seen, out, dropped = set(), [], 0
@@ -429,14 +487,12 @@ def build_reference(
     if umls_client is not None:
         mesh_ids, texts = snapshot_lookup_inputs(store, work / "inputs")
         umls_maps, text_map, umls_info = umls.fetch_umls(umls_client, store, mesh_ids, texts, deadline, today)
+        umls_maps, text_map, dropped_umls = prepare_umls(icd_codes, umls_maps, text_map)
         sources |= umls_maps
     code_map, dropped = combine_maps(icd_codes, sources)
-    text_map, dropped["umls_text"] = valid_text_map(icd_codes, text_map)
+    text_map, _ = valid_text_map(icd_codes, text_map)
     if umls_client is not None:
-        umls_info |= {
-            "rows": {s: len(sources[s]) for s in umls.SOURCES} | {"text": len(text_map)},
-            "dropped_invalid": {s: dropped[s] for s in (*umls.SOURCES, "umls_text")},
-        }
+        umls_info |= {"rows": {s: len(sources[s]) for s in umls.SOURCES} | {"text": len(text_map)}, **dropped_umls}
     if dropped["curated"]:
         raise ValueError(f"mesh_overrides.csv has {dropped['curated']} codes not in ICD-10-CM")
 

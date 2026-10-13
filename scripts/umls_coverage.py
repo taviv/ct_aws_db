@@ -25,6 +25,7 @@ from ct_pipeline.reference import (  # noqa: E402
     SCHEMAS,
     combine_maps,
     download_reference,
+    prepare_umls,
     uts_get,
     valid_text_map,
     write_table,
@@ -66,19 +67,20 @@ def main() -> None:
         mesh_ids, texts = umls.lookup_inputs(con)
         print(f"Snapshot {current['run_id']}, reference {reference['version']}")
         print(f"Looking up {len(mesh_ids):,} MeSH ids and {len(texts):,} condition strings in UMLS…", flush=True)
+        icd_codes = {r["code"] for r in rows(con, before / "icd10cm_codes" / "data.parquet")}
         maps, text_rows, info = umls.fetch_umls(
             client, store, mesh_ids, texts, progress=lambda d, n: print(f"  {d:,}/{n:,}", flush=True)
         )
         print(f"SNOMED CT → ICD-10-CM map {info['snomed_icd10cm_map']}: {info['snomed_map_concepts']:,} concepts")
+        maps, text_rows, prep = prepare_umls(icd_codes, maps, text_rows)
 
-        icd_codes = {r["code"] for r in rows(con, before / "icd10cm_codes" / "data.parquet")}
         base = [r for r in rows(con, before / "condition_code_map" / "data.parquet") if r["source"] not in umls.SOURCES]
         after = work / "after"
         for name in ("icd10cm_codes", "condition_text_rules"):
             (after / name).mkdir(parents=True)
             (after / name / "data.parquet").write_bytes((before / name / "data.parquet").read_bytes())
         code_map, dropped = combine_maps(icd_codes, {"base": base, **maps})
-        text_map, dropped["umls_text"] = valid_text_map(icd_codes, text_rows)
+        text_map, _ = valid_text_map(icd_codes, text_rows)
         base_map, _ = combine_maps(icd_codes, {"base": base})
         write_table(con, base_map, SCHEMAS["condition_code_map"], before / "condition_code_map" / "data.parquet")
         write_table(con, [], SCHEMAS["condition_text_map"], before / "condition_text_map" / "data.parquet")
@@ -86,8 +88,8 @@ def main() -> None:
         write_table(con, text_map, SCHEMAS["condition_text_map"], after / "condition_text_map" / "data.parquet")
         print(
             f"UMLS rows: {len(maps['umls']):,} MeSH→ICD-10-CM, {len(maps['umls_snomed']):,} via SNOMED CT, "
-            f"{len(text_map):,} text; dropped as not in ICD-10-CM: "
-            f"{ {s: dropped[s] for s in (*umls.SOURCES, 'umls_text')} }"
+            f"{len(text_map):,} text; dropped as not in ICD-10-CM: {prep['dropped_invalid']}, "
+            f"as ambiguous: {prep['dropped_ambiguous']}"
         )
 
         code_conditions(con, before, work / "out_before", "before")
@@ -115,6 +117,19 @@ def main() -> None:
             WHERE a.c <> b.c
         """).fetchone()[0]
         print(f"\nAlready-coded studies whose code set changed: {changed:,}")
+        print("\nMeSH terms whose codes changed, by studies (before → after):")
+        before_codes, after_codes = _codes_by_mesh(base_map), _codes_by_mesh(code_map)
+        changed_mesh = {m for m in before_codes if after_codes.get(m, set()) != before_codes[m]}
+        terms = q(
+            "SELECT mesh_id, any_value(term), count(DISTINCT nct_id) FROM condition_mesh_terms "
+            "WHERE NOT is_ancestor GROUP BY 1"
+        ).fetchall()
+        top = sorted((t for t in terms if t[0] in changed_mesh), key=lambda t: -t[2])[:20]
+        print(f"  ({len(changed_mesh):,} MeSH terms changed)")
+        for mesh_id, term, n in top:
+            b = ", ".join(sorted(before_codes[mesh_id]))
+            a = ", ".join(sorted(after_codes.get(mesh_id, ()))) or "-"
+            print(f"  {n:5,}  {term[:40]:40} {b[:30]} → {a[:30]}")
         print("\nMost common new mappings (check these look right):")
         for term, code, label, source, n in q(f"""
             SELECT coalesce(mesh_term, condition_name), code, label, source, count(DISTINCT nct_id)
@@ -132,6 +147,14 @@ def main() -> None:
         if not info["complete"]:
             print("\nLookups incomplete; run again to continue.")
         con.close()
+
+
+def _codes_by_mesh(rows: list) -> dict:
+    out = {}
+    for r in rows:
+        if r["code_system"] == "ICD10CM":
+            out.setdefault(r["mesh_id"], set()).add(r["code"])
+    return out
 
 
 if __name__ == "__main__":

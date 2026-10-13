@@ -87,8 +87,8 @@ ClinicalTrials.gov publishes no ICD codes, only free-text conditions and the MeS
 | `mesh_ancestor` | fallback when the study has no ICD-10-CM code otherwise: the most specific code reachable from a MeSH ancestor (`match_type = 'broad'`) |
 
 `match_type` is `exact` (same concept) or `broad` (the code is broader than the condition). Crosswalk
-sources, best first: curated overrides (`src/ct_pipeline/data/mesh_overrides.csv`), UMLS (MeSH and ICD-10-CM
-sharing a concept), MONDO (CC BY 4.0), Wikidata (CC0), then UMLS via SNOMED CT and NLM's SNOMED CT → ICD-10-CM
+sources, best first: curated overrides (`src/ct_pipeline/data/mesh_overrides.csv`), MONDO (CC BY 4.0), UMLS (MeSH and
+ICD-10-CM sharing a concept), Wikidata (CC0), then UMLS via SNOMED CT and NLM's SNOMED CT → ICD-10-CM
 map (`broad`). ICD-10-CM itself (CMS, public domain) is downloaded for the current fiscal year, and every
 ICD-10-CM code is validated against it.
 
@@ -110,7 +110,8 @@ Secrets Manager as `ct-pipeline/umls-api-key` (stack parameter `UmlsSecretName`)
 are skipped. `make umls-coverage` measures what UMLS adds to the current snapshot without publishing anything.
 The Reference function then looks up each condition MeSH term and repeated condition name through the UMLS
 REST API, caching results for 180 days in `reference/umls_cache.json`; lookups that don't fit in one run
-resume on the next. UMLS and SNOMED CT content is licensed: it stays in the private data bucket, and
+resume on the next. Each term's UMLS codes are collapsed to their common parent within one ICD-10-CM
+category (e.g. R11.1 and R11.10 → R11.1); codes spanning categories are dropped as ambiguous. UMLS and SNOMED CT content is licensed: it stays in the private data bucket, and
 only the derived ICD-10-CM codes (public domain) appear in `study_condition_codes`. For local runs, set
 `UMLS_API_KEY` in the environment.
 
