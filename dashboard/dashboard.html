@@ -184,6 +184,12 @@
     <div class="chart-box"><h2>Top 15 Countries (Sites)</h2><canvas id="chart-countries" height="380"></canvas></div>
   </div>
 
+  <!-- Row 2b: ICD-10-CM coding -->
+  <div class="chart-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:28px">
+    <div class="chart-box"><h2>Studies by ICD-10-CM Chapter</h2><canvas id="chart-icd10-chapters" height="380"></canvas></div>
+    <div class="chart-box"><h2>Top 15 ICD-10-CM Categories</h2><canvas id="chart-icd10-categories" height="380"></canvas></div>
+  </div>
+
   <!-- Row 3: sponsor class, intervention types, enrollment -->
   <div class="chart-grid">
     <div class="chart-box"><h2>Sponsor Class</h2><canvas id="chart-sponsor" height="260"></canvas></div>
@@ -379,6 +385,8 @@ async function loadAll() {
       loadByYear(),
       query("top_conditions").then(d  => hBar("conditions",   d, "#6366f1")),
       query("top_countries").then(d   => hBar("countries",    d, "#22c55e")),
+      query("icd10_chapters").then(d  => hBar("icd10-chapters", d, "#f97316")),
+      query("top_icd10_categories").then(d => hBar("icd10-categories", d, "#a855f7")),
       query("sponsor_class").then(d   => donut("sponsor",       d)),
       query("intervention_types").then(d => donut("intervention", d)),
       query("enrollment_distribution").then(d => hBar("enrollment", d, "#3b82f6")),

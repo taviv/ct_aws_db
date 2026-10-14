@@ -21,6 +21,7 @@ from .storage import Store, open_store
 logger = logging.getLogger(__name__)
 
 API_TABLES = ("studies", "study_locations", "study_conditions", "study_interventions")
+OPTIONAL_API_TABLES = ("study_condition_codes",)  # absent until the first reference build
 REFRESH_SECONDS = 300
 HEADERS = {"Content-Type": "application/json", "Cache-Control": "public, max-age=900"}
 
@@ -40,10 +41,11 @@ def _connection(settings: Settings, store: Store):
 
     base = Path(settings.work_dir) / "snapshot"
     target = base / current["run_id"]
-    for table in API_TABLES:
+    tables = API_TABLES + tuple(t for t in OPTIONAL_API_TABLES if t in current["tables"])
+    for table in tables:
         store.download(current["tables"][table], target / table / "data.parquet")
     con = connect(Path(settings.work_dir) / "duckdb")
-    attach_snapshot(con, target, API_TABLES)
+    attach_snapshot(con, target, tables)
     if _state["con"] is not None:
         _state["con"].close()
     for old in base.iterdir():
