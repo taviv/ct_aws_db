@@ -38,7 +38,7 @@ def _healthy_pattern() -> str:
 
 _HEALTHY_LABEL = "Healthy volunteers"
 _CONDITION_GROUP = f"""CASE WHEN regexp_full_match(trim(regexp_replace(lower(condition_name), '[^a-z0-9]+', ' ', 'g')),
-    '{_healthy_pattern().replace("?", "{{0,1}}").replace("'", "''")}') THEN '~healthy' ELSE {_CONDITION_KEY} END"""
+    '{_healthy_pattern().replace("?", "{0,1}").replace("'", "''")}') THEN '~healthy' ELSE {_CONDITION_KEY} END"""
 
 OVERVIEW_QUERIES = {
     "summary_stats": """
