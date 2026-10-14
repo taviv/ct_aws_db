@@ -85,3 +85,26 @@ def test_no_snapshot_returns_500_without_details(settings, store):
     query_api._state.update(run_id=None, con=None, checked_at=0.0)
     status, body, _ = call(settings, store, name="duration_summary")
     assert status == 500 and body == {"error": "Query failed"}
+
+
+def test_top_conditions_merges_spelling_variants(settings, store, site_store):
+    names = {
+        "NCT1": ["COVID-19", "Covid19"],
+        "NCT2": ["Covid-19"],
+        "NCT3": ["Diabetes Mellitus, Type 2"],
+        "NCT4": ["Type 2 Diabetes"],
+        "NCT5": ["type 2 diabetes melitus", "Type 1 Diabetes"],
+        "NCT6": ["Diabetes Mellitus, Type 2"],
+    }
+    studies = []
+    for nct_id, conditions in names.items():
+        s = make_study(nct_id)
+        s["protocolSection"]["conditionsModule"] = {"conditions": conditions}
+        studies.append(s)
+    store.put_bytes("raw/R1/page_0001.ndjson", ndjson(studies))
+    transform_page(settings, store, "R1", "raw/R1/page_0001.ndjson")
+    build_snapshot(settings, store, site_store, "R1", "full", "2024-01-01T00:00:00+00:00")
+    query_api._state.update(run_id=None, con=None, checked_at=0.0)
+    status, body, _ = call(settings, store, name="top_conditions")
+    assert status == 200
+    assert body["rows"] == [["Diabetes Mellitus, Type 2", 4], ["COVID-19", 2], ["Type 1 Diabetes", 1]]

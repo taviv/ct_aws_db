@@ -15,6 +15,16 @@ PHASE_GROUP_LABELS = {
     "NA": "Not applicable",
 }
 
+# Free-text condition names grouped by spelling variant: case, punctuation, word order, plurals and a few
+# filler words are ignored, so "Covid19" = "COVID-19" and "Diabetes Mellitus, Type 2" = "Type 2 Diabetes".
+_CONDITION_FILLER_WORDS = ("mellitus", "of", "the", "and")
+_CONDITION_KEY = f"""array_to_string(list_sort(list_distinct(list_filter(
+    list_transform(regexp_extract_all(lower(condition_name), '[a-z]+|[0-9]+'),
+        t -> CASE WHEN t = 'melitus' THEN 'mellitus'
+                  WHEN length(t) > 3 AND t[-1:] = 's' AND t[-2:] NOT IN ('ss', 'us', 'is') THEN t[:-2]
+                  ELSE t END),
+    t -> t NOT IN {_CONDITION_FILLER_WORDS}))), ' ')"""
+
 OVERVIEW_QUERIES = {
     "summary_stats": """
         SELECT
@@ -40,10 +50,13 @@ OVERVIEW_QUERIES = {
     "sponsor_class": """
         SELECT COALESCE(lead_sponsor_class, 'UNKNOWN') AS label, COUNT(*) AS value FROM s GROUP BY 1 ORDER BY 2 DESC
     """,
-    "top_conditions": """
-        SELECT condition_name AS label, COUNT(*) AS value
-        FROM study_conditions SEMI JOIN s USING (nct_id)
-        GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 15
+    "top_conditions": f"""
+        SELECT arg_min(condition_name, (-n, condition_name)) AS label, COUNT(DISTINCT nct_id) AS value
+        FROM (
+            SELECT nct_id, condition_name, k, COUNT(*) OVER (PARTITION BY k, condition_name) AS n
+            FROM (SELECT nct_id, condition_name, {_CONDITION_KEY} AS k FROM study_conditions SEMI JOIN s USING (nct_id))
+        )
+        GROUP BY k ORDER BY 2 DESC, 1 LIMIT 15
     """,
     "top_countries": """
         SELECT country AS label, COUNT(DISTINCT nct_id) AS value
