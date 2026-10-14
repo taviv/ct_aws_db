@@ -3,10 +3,12 @@ Reference vocabularies for condition coding, versioned under reference/<version>
 
   icd10cm_codes          ICD-10-CM chapters, blocks, categories and codes (CMS tabular + order files)
   condition_code_map     condition MeSH ID → code (ICD10CM, ICD11, MONDO, UMLS), with source and match type
+  condition_text_map     normalised free-text condition name → code (UMLS concept search; empty without a key)
   condition_text_rules   regex on normalised free-text condition names → code (curated, data/)
   reference/CURRENT.json → the active version
 
-Crosswalk sources, best first: curated overrides (data/mesh_overrides.csv), MONDO SSSOM, Wikidata.
+Crosswalk sources, best first: curated overrides (data/mesh_overrides.csv), MONDO SSSOM, UMLS (CUI synonymy;
+needs an API key, see umls.py), Wikidata, UMLS via SNOMED CT. Exact matches beat broad ones.
 Every ICD-10-CM code is validated against the CMS code list; invalid codes are dropped and counted.
 """
 
@@ -14,6 +16,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -25,7 +28,8 @@ from urllib.parse import urlencode
 import urllib3
 from urllib3.util.retry import Retry
 
-from .config import REFERENCE_CURRENT_KEY, REFERENCE_PREFIX
+from . import umls
+from .config import CURRENT_KEY, REFERENCE_CURRENT_KEY, REFERENCE_PREFIX
 from .db import connect
 
 logger = logging.getLogger(__name__)
@@ -42,7 +46,9 @@ MONDO_SSSOM_URL = (
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIDATA_PROPERTIES = {"ICD10CM": "P4229", "ICD11": "P7807"}
 
-SOURCE_PRIORITY = ("curated", "mondo", "wikidata")
+SOURCE_PRIORITY = ("curated", "mondo", "umls", "wikidata", "umls_snomed")
+# catch-all codes the SNOMED CT map defaults to; they say nothing about the condition
+NONSPECIFIC_ICD10CM = frozenset({"B99", "B99.8", "B99.9", "R68.8", "R68.89", "R69"})
 MATCH_TYPES = ("exact", "broad")
 
 SCHEMAS = {
@@ -59,6 +65,14 @@ SCHEMAS = {
     },
     "condition_code_map": {
         "mesh_id": "VARCHAR",
+        "code_system": "VARCHAR",
+        "code": "VARCHAR",
+        "label": "VARCHAR",
+        "match_type": "VARCHAR",
+        "source": "VARCHAR",
+    },
+    "condition_text_map": {
+        "condition_norm": "VARCHAR",
         "code_system": "VARCHAR",
         "code": "VARCHAR",
         "label": "VARCHAR",
@@ -82,14 +96,26 @@ _HTTP = urllib3.PoolManager(
 USER_AGENT = "ct-aws-db-reference/1.0 (https://github.com/taviv/ct_aws_db)"
 
 
-def http_get(url: str, headers=None) -> bytes | None:
+def http_get(url: str, headers=None, **request_kw) -> bytes | None:
     """Body for 200, None for 404; raises otherwise."""
-    r = _HTTP.request("GET", url, headers={"User-Agent": USER_AGENT, **(headers or {})}, preload_content=True)
+    r = _HTTP.request(
+        "GET", url, headers={"User-Agent": USER_AGENT, **(headers or {})}, preload_content=True, **request_kw
+    )
     if r.status == 404:
         return None
     if r.status != 200:
         raise RuntimeError(f"GET {url} → HTTP {r.status}")
     return r.data
+
+
+def uts_get(url: str, headers=None) -> bytes | None:
+    """http_get for the UMLS API: fail fast on a stalled request (it is retried on the next run)."""
+    return http_get(
+        url,
+        headers,
+        timeout=urllib3.Timeout(connect=10, read=30),
+        retries=Retry(total=2, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504)),
+    )
 
 
 def normalize_condition(text: str) -> str:
@@ -353,9 +379,98 @@ def write_table(con, rows: list, schema: dict, path: Path) -> None:
     src.unlink()
 
 
-def build_reference(store, work_dir: str, get=http_get, today: date = None, now: datetime = None) -> dict:
+def snapshot_lookup_inputs(store, work: Path) -> tuple:
+    """UMLS lookup inputs (MeSH ids, condition strings) from the current snapshot; ([], []) if there is none."""
+    current = store.get_json(CURRENT_KEY)
+    if current is None:
+        return [], []
+    con = connect(work)
+    try:
+        for table in ("study_conditions", "condition_mesh_terms"):
+            path = work / "snapshot" / table / "data.parquet"
+            store.download(current["tables"][table], path)
+            con.execute(f"CREATE VIEW {table} AS SELECT * FROM read_parquet('{path}')")
+        return umls.lookup_inputs(con)
+    finally:
+        con.close()
+
+
+def strip_extension(code: str) -> str:
+    """'T81.9XXS' → 'T81.9': drop an ICD-10-CM 7th character (encounter/sequela) and its X placeholders."""
+    return code[:-1].rstrip("X").rstrip(".") if len(code.replace(".", "")) == 7 else code
+
+
+def common_code(codes: set, icd_codes: set) -> str | None:
+    """The most specific valid code covering all `codes` within one category; None if they span categories."""
+    if len({c[:3] for c in codes}) != 1:
+        return None
+    code = os.path.commonprefix(sorted(codes)).rstrip(".")
+    while code not in icd_codes and len(code) > 3:
+        code = code[:-1].rstrip(".")
+    return code if code in icd_codes else None
+
+
+def collapse_umls(icd_codes: set, rows: list, key: str) -> tuple:
+    """
+    One code per (key, source): UMLS returns every code sharing a concept (Vomiting → R11.1, R11.10) and
+    some that only share an index term (Alopecia → L64, L65.9, L66.0). Codes within one category collapse to
+    their common parent; codes across categories, or catch-alls like B99.9, are dropped as ambiguous.
+    Returns (rows, invalid count, ambiguous count).
+    """
+    groups, invalid = {}, 0
+    for r in rows:
+        code = normalize_icd10cm(r["code"])
+        if code not in icd_codes:
+            invalid += 1
+            continue
+        groups.setdefault((r[key], r["source"]), []).append({**r, "code": strip_extension(code), "orig": code})
+    out, ambiguous = [], 0
+    for group in groups.values():
+        code = common_code({r["code"] for r in group}, icd_codes)
+        if code is None or code in NONSPECIFIC_ICD10CM:
+            ambiguous += 1
+            continue
+        same = [r for r in group if r["orig"] == code]
+        r = same[0] if same else {**group[0], "code": code, "label": None, "match_type": "broad"}
+        out.append({k: v for k, v in r.items() if k != "orig"})
+    return out, invalid, ambiguous
+
+
+def prepare_umls(icd_codes: set, maps: dict, text_rows: list) -> tuple:
+    """(code map rows by source, text map rows, {dropped_invalid, dropped_ambiguous}) with collapse_umls applied."""
+    info = {"dropped_invalid": {}, "dropped_ambiguous": {}}
+    out = {}
+    for source, rows in maps.items():
+        out[source], info["dropped_invalid"][source], info["dropped_ambiguous"][source] = collapse_umls(
+            icd_codes, rows, "mesh_id"
+        )
+    text_rows, info["dropped_invalid"]["umls_text"], info["dropped_ambiguous"]["umls_text"] = collapse_umls(
+        icd_codes, text_rows, "condition_norm"
+    )
+    return out, text_rows, info
+
+
+def valid_text_map(icd_codes: set, rows: list) -> tuple:
+    """(condition_text_map rows with valid, normalized ICD-10-CM codes, deduplicated; dropped invalid count)."""
+    seen, out, dropped = set(), [], 0
+    for r in rows:
+        r = {**r, "code": normalize_icd10cm(r["code"])}
+        if r["code"] not in icd_codes:
+            dropped += 1
+        elif (r["condition_norm"], r["code"]) not in seen:
+            seen.add((r["condition_norm"], r["code"]))
+            out.append(r)
+    return sorted(out, key=lambda r: (r["condition_norm"], r["code"])), dropped
+
+
+def build_reference(
+    store, work_dir: str, get=http_get, today: date = None, now: datetime = None, umls_client=None, deadline=None
+) -> dict:
+    """umls_client: an umls.UmlsClient to add the UMLS layer; deadline (time.monotonic()) caps its lookups."""
     now = now or datetime.now(timezone.utc)
     version = now.strftime("%Y%m%dT%H%M%SZ")
+    work = Path(work_dir) / "reference" / version
+    shutil.rmtree(work, ignore_errors=True)
     icd_rows, icd_info = fetch_icd10cm(get, today or now.date())
     icd_codes = {r["code"] for r in icd_rows}
     overrides, rules = load_curated()
@@ -367,13 +482,26 @@ def build_reference(store, work_dir: str, get=http_get, today: date = None, now:
     rules = [{**r, "code": normalize_icd10cm(r["code"])} for r in rules]
     mondo = parse_mondo_sssom(_read_text(get(MONDO_SSSOM_URL)))
     wikidata = fetch_wikidata(get)
-    code_map, dropped = combine_maps(icd_codes, {"curated": overrides, "mondo": mondo, "wikidata": wikidata})
+    sources = {"curated": overrides, "mondo": mondo, "wikidata": wikidata}
+    text_map, umls_info = [], {"skipped": "no UMLS API key"}
+    if umls_client is not None:
+        mesh_ids, texts = snapshot_lookup_inputs(store, work / "inputs")
+        umls_maps, text_map, umls_info = umls.fetch_umls(umls_client, store, mesh_ids, texts, deadline, today)
+        umls_maps, text_map, dropped_umls = prepare_umls(icd_codes, umls_maps, text_map)
+        sources |= umls_maps
+    code_map, dropped = combine_maps(icd_codes, sources)
+    text_map, _ = valid_text_map(icd_codes, text_map)
+    if umls_client is not None:
+        umls_info |= {"rows": {s: len(sources[s]) for s in umls.SOURCES} | {"text": len(text_map)}, **dropped_umls}
     if dropped["curated"]:
         raise ValueError(f"mesh_overrides.csv has {dropped['curated']} codes not in ICD-10-CM")
 
-    tables = {"icd10cm_codes": icd_rows, "condition_code_map": code_map, "condition_text_rules": rules}
-    work = Path(work_dir) / "reference" / version
-    shutil.rmtree(work, ignore_errors=True)
+    tables = {
+        "icd10cm_codes": icd_rows,
+        "condition_code_map": code_map,
+        "condition_text_map": text_map,
+        "condition_text_rules": rules,
+    }
     con = connect(work)
     keys = {}
     try:
@@ -394,6 +522,7 @@ def build_reference(store, work_dir: str, get=http_get, today: date = None, now:
             "mondo": {"url": MONDO_SSSOM_URL, "rows": len(mondo), "dropped_invalid": dropped["mondo"]},
             "wikidata": {"url": WIKIDATA_SPARQL_URL, "rows": len(wikidata), "dropped_invalid": dropped["wikidata"]},
             "curated": {"mesh_overrides": len(overrides), "text_rules": len(rules)},
+            "umls": umls_info,
         },
     }
     store.put_json(REFERENCE_CURRENT_KEY, pointer)
@@ -410,6 +539,14 @@ def download_reference(store, dest: Path) -> dict | None:
         return None
     for name, key in pointer["tables"].items():
         store.download(key, dest / name / "data.parquet")
+    missing = [n for n in REFERENCE_TABLES if n not in pointer["tables"]]  # references built by older code
+    if missing:
+        con = connect(dest)
+        try:
+            for name in missing:
+                write_table(con, [], SCHEMAS[name], dest / name / "data.parquet")
+        finally:
+            con.close()
     return pointer
 
 

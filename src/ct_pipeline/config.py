@@ -29,6 +29,7 @@ class Settings:
     glue_database: str
     keep_snapshots: int
     work_dir: str
+    umls_secret_name: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -42,4 +43,5 @@ class Settings:
             glue_database=_env("CT_GLUE_DATABASE"),
             keep_snapshots=int(_env("CT_KEEP_SNAPSHOTS", "3")),
             work_dir=_env("CT_WORK_DIR", "/tmp/ct"),
+            umls_secret_name=_env("CT_UMLS_SECRET_NAME"),
         )
