@@ -4,6 +4,9 @@ query Lambda (filtered duration views). Every query is scoped to the CTE ``s`` â
 matching the selected phase group â€” so one SQL text serves every phase.
 """
 
+import csv
+from pathlib import Path
+
 PHASE_GROUP_LABELS = {
     "EARLY_PHASE1": "Early Phase 1",
     "PHASE1": "Phase 1",
@@ -52,6 +55,19 @@ _ICD10_CHAPTERS = [
 ]
 _ICD10_CHAPTER_LIST = "[" + ", ".join(f"'{c}'" for c in _ICD10_CHAPTERS) + "]"
 
+
+def _healthy_pattern() -> str:
+    """The curated healthy-volunteer rule (data/condition_text_rules.csv), so the chart and Z00.6 coding agree."""
+    with open(Path(__file__).parent / "data" / "condition_text_rules.csv", newline="") as f:
+        rows = csv.DictReader(line for line in f if not line.startswith("#"))
+        return next(r["pattern"] for r in rows if r["note"].startswith("Healthy volunteers"))
+
+
+_HEALTHY_LABEL = "Healthy volunteers"
+_CONDITION_GROUP = f"""CASE WHEN regexp_full_match(trim(regexp_replace(lower(condition_name), '[^a-z0-9]+', ' ', 'g')),
+    '{_healthy_pattern().replace("?", "{0,1}").replace("'", "''")}') THEN '~healthy' ELSE {_CONDITION_KEY} END"""
+
+
 OVERVIEW_QUERIES = {
     "icd10_chapters": f"""
         SELECT {_ICD10_CHAPTER_LIST}[icd10_chapter] AS label, COUNT(DISTINCT nct_id) AS value
@@ -94,10 +110,15 @@ OVERVIEW_QUERIES = {
         SELECT COALESCE(lead_sponsor_class, 'UNKNOWN') AS label, COUNT(*) AS value FROM s GROUP BY 1 ORDER BY 2 DESC
     """,
     "top_conditions": f"""
-        SELECT arg_min(condition_name, (-n, condition_name)) AS label, COUNT(DISTINCT nct_id) AS value
+        SELECT CASE WHEN k = '~healthy' THEN '{_HEALTHY_LABEL}'
+                    ELSE arg_min(condition_name, (-n, condition_name)) END AS label,
+               COUNT(DISTINCT nct_id) AS value
         FROM (
             SELECT nct_id, condition_name, k, COUNT(*) OVER (PARTITION BY k, condition_name) AS n
-            FROM (SELECT nct_id, condition_name, {_CONDITION_KEY} AS k FROM study_conditions SEMI JOIN s USING (nct_id))
+            FROM (
+                SELECT nct_id, condition_name, {_CONDITION_GROUP} AS k
+                FROM study_conditions SEMI JOIN s USING (nct_id)
+            )
         )
         GROUP BY k ORDER BY 2 DESC, 1 LIMIT 15
     """,
