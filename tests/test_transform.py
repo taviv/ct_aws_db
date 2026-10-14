@@ -78,3 +78,17 @@ def test_transform_full_page_fits_lambda_memory(tmp_path):
     finally:
         c.close()
     assert counts["studies"] == 1000
+
+
+def test_transform_reads_pages_just_over_16_mib(con, tmp_path):
+    # DuckDB's default 16 MiB maximum_object_size made some ~16.8 MB pages fail as "Malformed JSON"
+    studies = [make_study(f"NCT{i:08d}") for i in range(1000)]
+    for s in studies:
+        s["protocolSection"]["descriptionModule"] = {"detailedDescription": ""}
+    pad = (16_789_999 - len(ndjson(studies))) // len(studies)
+    for s in studies:
+        s["protocolSection"]["descriptionModule"]["detailedDescription"] = "x" * pad
+    path = tmp_path / "page.ndjson"
+    path.write_bytes(ndjson(studies))
+    assert 16 * 2**20 < path.stat().st_size < 16_800_000
+    assert transform_file(con, path, tmp_path / "out", "page")["studies"] == 1000
