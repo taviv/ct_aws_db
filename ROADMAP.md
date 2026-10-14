@@ -10,7 +10,7 @@ Structured disease/condition codes per study, with ICD-10-CM as the primary code
 2. **API, dashboard and checks**: ICD-10 chapter/category charts, an `icd10=` filter, `make verify` checks for code validity and coverage.
 3. **UMLS layer**: MeSH → UMLS CUI → ICD-10-CM and the NLM SNOMED CT → ICD-10-CM map. Licensed mapping tables stay in the private data bucket.
 4. **LLM evaluation harness**: about 300 reviewed studies, `make llm-eval`, scorecard (valid codes, category/exact agreement, correct "no code", cost).
-5. **LLM tier**: protocol-aware coding (title, summary, eligibility, keywords, interventions) that selects only from retrieved candidate codes, with quoted evidence, confidence, model and prompt version stored.
+5. **LLM tier**: protocol-aware coding (title, summary, eligibility, keywords, interventions) that selects only from retrieved candidate codes, with quoted evidence, confidence, model and prompt version stored. v1 (`make llm-code`) picks ICD-10-CM categories from the full category list instead of retrieved candidates, because word-match retrieval found the right category only ~80% of the time.
 
 ## 2. Treatment standardisation (after phase 1)
 
