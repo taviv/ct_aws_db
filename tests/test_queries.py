@@ -133,9 +133,6 @@ def test_icd10_panel_queries():
         ["C34 Malignant neoplasm of bronchus and lung", 1],
         ["E11 Type 2 diabetes mellitus", 1],
     ]
-||||||| 6c7a94b
-
-
 
 
 def test_top_conditions_merges_healthy_volunteer_names(settings, store, site_store):
