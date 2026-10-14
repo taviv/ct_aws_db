@@ -229,6 +229,7 @@ def _publish(settings, store, site_store, con, work: Path, run_id, mode, previou
     else:
         counts["study_condition_codes"] = code_conditions(con, work / "reference", out_dir, reference["version"])
         derived = DERIVED_TABLES
+        attach_snapshot(con, out_dir, derived)
 
     tables = {}
     for table in (*TABLES, *derived):
