@@ -108,3 +108,24 @@ def test_top_conditions_merges_spelling_variants(settings, store, site_store):
     status, body, _ = call(settings, store, name="top_conditions")
     assert status == 200
     assert body["rows"] == [["Diabetes Mellitus, Type 2", 4], ["COVID-19", 2], ["Type 1 Diabetes", 1]]
+
+
+def test_top_conditions_merges_healthy_volunteer_names(settings, store, site_store):
+    names = {
+        "NCT1": ["Healthy"],
+        "NCT2": ["Healthy Volunteers"],
+        "NCT3": ["healthy adult subjects (HS)", "Healthy"],
+        "NCT4": ["Healthy Aging"],
+    }
+    studies = []
+    for nct_id, conditions in names.items():
+        s = make_study(nct_id)
+        s["protocolSection"]["conditionsModule"] = {"conditions": conditions}
+        studies.append(s)
+    store.put_bytes("raw/R1/page_0001.ndjson", ndjson(studies))
+    transform_page(settings, store, "R1", "raw/R1/page_0001.ndjson")
+    build_snapshot(settings, store, site_store, "R1", "full", "2024-01-01T00:00:00+00:00")
+    query_api._state.update(run_id=None, con=None, checked_at=0.0)
+    status, body, _ = call(settings, store, name="top_conditions")
+    assert status == 200
+    assert body["rows"] == [["Healthy volunteers", 3], ["Healthy Aging", 1]]
