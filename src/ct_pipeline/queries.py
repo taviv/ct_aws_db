@@ -60,10 +60,14 @@ OVERVIEW_QUERIES = {
         GROUP BY icd10_chapter ORDER BY 2 DESC, 1
     """,
     "top_icd10_categories": """
-        SELECT icd10_category || ' ' || arg_min(label, length(code)) AS label, COUNT(DISTINCT nct_id) AS value
-        FROM study_condition_codes SEMI JOIN s USING (nct_id)
-        WHERE code_system = 'ICD10CM' AND icd10_category IS NOT NULL
-        GROUP BY icd10_category ORDER BY 2 DESC, 1 LIMIT 15
+        SELECT icd10_category || ' ' || CASE WHEN length(l) > 45 THEN l[:44] || '…' ELSE l END AS label, value
+        FROM (
+            SELECT icd10_category, arg_min(label, length(code)) AS l, COUNT(DISTINCT nct_id) AS value
+            FROM study_condition_codes SEMI JOIN s USING (nct_id)
+            WHERE code_system = 'ICD10CM' AND icd10_category IS NOT NULL
+            GROUP BY icd10_category
+        )
+        ORDER BY 2 DESC, 1 LIMIT 15
     """,
     "summary_stats": """
         SELECT
