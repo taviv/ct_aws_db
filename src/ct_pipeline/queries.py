@@ -25,7 +25,46 @@ _CONDITION_KEY = f"""array_to_string(list_sort(list_distinct(list_filter(
                   ELSE t END),
     t -> t NOT IN {_CONDITION_FILLER_WORDS}))), ' ')"""
 
+# ICD-10-CM chapter titles (shortened), indexed by study_condition_codes.icd10_chapter (1-22).
+_ICD10_CHAPTERS = [
+    "Infectious and parasitic (A00-B99)",
+    "Neoplasms (C00-D49)",
+    "Blood and immune (D50-D89)",
+    "Endocrine and metabolic (E00-E89)",
+    "Mental and behavioural (F01-F99)",
+    "Nervous system (G00-G99)",
+    "Eye (H00-H59)",
+    "Ear (H60-H95)",
+    "Circulatory (I00-I99)",
+    "Respiratory (J00-J99)",
+    "Digestive (K00-K95)",
+    "Skin (L00-L99)",
+    "Musculoskeletal (M00-M99)",
+    "Genitourinary (N00-N99)",
+    "Pregnancy and childbirth (O00-O9A)",
+    "Perinatal (P00-P96)",
+    "Congenital (Q00-Q99)",
+    "Symptoms and abnormal findings (R00-R99)",
+    "Injury and poisoning (S00-T88)",
+    "External causes (V00-Y99)",
+    "Health status and services (Z00-Z99)",
+    "Special purposes (U00-U85)",
+]
+_ICD10_CHAPTER_LIST = "[" + ", ".join(f"'{c}'" for c in _ICD10_CHAPTERS) + "]"
+
 OVERVIEW_QUERIES = {
+    "icd10_chapters": f"""
+        SELECT {_ICD10_CHAPTER_LIST}[icd10_chapter] AS label, COUNT(DISTINCT nct_id) AS value
+        FROM study_condition_codes SEMI JOIN s USING (nct_id)
+        WHERE code_system = 'ICD10CM' AND icd10_chapter BETWEEN 1 AND {len(_ICD10_CHAPTERS)}
+        GROUP BY icd10_chapter ORDER BY 2 DESC, 1
+    """,
+    "top_icd10_categories": """
+        SELECT icd10_category || ' ' || arg_min(label, length(code)) AS label, COUNT(DISTINCT nct_id) AS value
+        FROM study_condition_codes SEMI JOIN s USING (nct_id)
+        WHERE code_system = 'ICD10CM' AND icd10_category IS NOT NULL
+        GROUP BY icd10_category ORDER BY 2 DESC, 1 LIMIT 15
+    """,
     "summary_stats": """
         SELECT
             COUNT(*)                                                         AS total_studies,
@@ -197,7 +236,17 @@ def build_query(name: str, filters: dict = None):
     raise KeyError(name)
 
 
+# Snapshots published before the first reference build have no study_condition_codes.
+_EMPTY_CONDITION_CODES = """
+    CREATE VIEW IF NOT EXISTS study_condition_codes AS
+    SELECT NULL::VARCHAR AS nct_id, NULL::VARCHAR AS code_system, NULL::VARCHAR AS code, NULL::VARCHAR AS label,
+           NULL::INTEGER AS icd10_chapter, NULL::VARCHAR AS icd10_category
+    WHERE false
+"""
+
+
 def run_query(con, name: str, filters: dict = None):
+    con.execute(_EMPTY_CONDITION_CODES)
     sql, args = build_query(name, filters)
     cur = con.execute(sql, args)
     cols = [d[0] for d in cur.description]
