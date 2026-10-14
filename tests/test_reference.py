@@ -241,6 +241,31 @@ def test_build_codes_conditions_by_mesh_text_and_ancestor(settings, store, site_
     assert not any(n == "NCT4" for n, _, _ in codes)
 
 
+def test_condition_stats_script(settings, store, site_store, curated, monkeypatch, capsys):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "condition_stats", Path(__file__).parents[1] / "scripts" / "condition_stats.py"
+    )
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    R.build_reference(store, settings.work_dir, get=fake_get())
+    studies = [
+        _study("NCT1", ["NSCLC"], meshes=[("D008175", "Lung Neoplasms")]),
+        _study("NCT2", ["Healthy Volunteers"]),
+        _study("NCT3", ["Advanced Solid Tumors"], meshes=[("D999999", "Unmapped")], ancestors=[("D009369", "Neo")]),
+        _study("NCT4", ["Something rare"]),
+    ]
+    _build(settings, store, site_store, "R1", studies)
+    monkeypatch.setattr(sys, "argv", ["condition_stats.py", "--data", str(store.root)])
+    script.main()
+    out = capsys.readouterr().out
+    assert "| All     |       4 | 75.0% |      50.0% |" in out
+    assert "| Healthy (Z00.6)       |" in out and "| something rare |       1 |" in out
+
+
 def test_build_without_reference_skips_coding(settings, store, site_store):
     _build(settings, store, site_store, "R1", [_study("NCT1", ["Healthy"])])
     current = store.get_json(CURRENT_KEY)

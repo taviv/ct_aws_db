@@ -33,7 +33,7 @@ SELECT
     json->'$.protocolSection'                             AS ps,
     json->'$.derivedSection'                              AS dv,
     TRY_CAST(json->>'$.hasResults' AS BOOLEAN)            AS has_results
-FROM read_ndjson_objects('{path}')
+FROM read_ndjson_objects('{path}', format = 'newline_delimited', maximum_object_size = 67108864)
 WHERE json->>'$.protocolSection.identificationModule.nctId' IS NOT NULL
 """
 

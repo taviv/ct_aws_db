@@ -61,6 +61,7 @@ src/ct_pipeline/      one package, four Lambda handlers (handlers.py)
   glue.py             registers the snapshot in the Glue catalog
   db.py               DuckDB connections that spill only under CT_WORK_DIR
   verify.py           data integrity checks behind `make verify`
+scripts/condition_stats.py  condition-coding coverage per phase behind `make condition-stats`
 statemachine/         Step Functions definition (ASL)
 template.yaml         SAM template: buckets, functions, state machine, schedule, CloudFront, Athena
 dashboard/            static dashboards (Chart.js)
@@ -135,6 +136,7 @@ make deploy      # sam build + sam deploy (--guided the first time, saving samco
 make backfill    # first load / after changing QueryTerm or StartYear: full fetch, replaces the snapshot
 make run         # incremental run now (the schedule does this weekly)
 make verify      # data integrity checks (see "Verifying the data")
+make condition-stats  # ICD-10-CM coding coverage per phase (read-only)
 ```
 
 Use `make deploy` rather than `sam deploy`: plain `sam deploy` does not upload the dashboard
