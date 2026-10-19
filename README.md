@@ -78,7 +78,7 @@ All tables are keyed by `nct_id`. One row per study in `studies` and `study_text
 | Table | Contents |
 |---|---|
 | `studies` | status, dates, design, enrollment, lead sponsor, eligibility, FDA flags, `phases` (list), `phase_group` (e.g. `PHASE1/PHASE2`, `NA`), `start_end` (start → completion, days), `last_update_post_date` |
-| `study_text` | brief summary, detailed description, eligibility criteria (kept apart so the main table stays small) |
+| `study_text` | `brief_summary`, `detailed_description`, `eligibility_criteria` (free text, kept apart so the main table stays small) |
 | `study_phases` | one row per phase |
 | `study_conditions` | condition names |
 | `study_interventions` | type, name, description |
@@ -140,7 +140,20 @@ confidence is published as `match_type='broad'`. LLM codes never replace an exac
 make llm-eval MODEL=<model or inference-profile id>                     # scorecard: ~300 studies with exact MeSH codes
 make llm-code MODEL=<model or inference-profile id> ARGS="--limit 1000" # code studies without an exact code (resumable)
 make reference                                                          # publish them as via='llm'
+make llm-try MODEL=<model or inference-profile id>                      # table for 10 ambiguous Phase 3 studies
 ```
+
+`make llm-try` is a quick manual check that writes no cache: it samples studies with no exact code and a vague
+condition name ("Solid Tumors", "Advanced Cancer", ...), sends only the text fields in `--fields` (default
+`brief_summary`), and prints the codes with their quotes. `ARGS="--ids NCT07815665,NCT07522073 --fields
+brief_summary,eligibility_criteria --review try.csv"` picks the studies, adds fields and writes a CSV to check.
+
+Where the specifics are: `study_text` has three free-text fields, `brief_summary`, `detailed_description` and
+`eligibility_criteria`. For basket studies the tumor types are often named only in the eligibility criteria
+(NCT05001516, "Advanced Solid Tumors": the Phase Ib inclusion criteria list gastric/GEJ, pancreatic, biliary,
+MSI-H colorectal, esophageal and ovarian mucinous carcinoma; the summary and description stay generic). In others
+they are in the title or summary (NCT07522073: "Solid Tumors", title says KRAS G12D pancreatic ductal
+adenocarcinoma). Eligibility text is often long (42% of LLM targets exceed the 3,000 characters sent).
 
 `ARGS="--review answers.csv"` writes every answer to a CSV; `--price-in/--price-out/--price-cache-read/
 --price-cache-write` (USD per million tokens) add a cost estimate. In CloudShell, start long runs detached:
@@ -247,6 +260,17 @@ Athena (workgroup = stack name, database `clinical_trials`):
 ```sql
 SELECT phase_group, count(*) AS studies, approx_percentile(start_end, 0.5) AS median_days
 FROM studies WHERE overall_status = 'COMPLETED' GROUP BY 1 ORDER BY 1;
+```
+
+One study's protocol text from CloudShell (prints CSV):
+
+```bash
+ID=NCT05001516
+Q=$(aws athena start-query-execution --work-group ct-pipeline --query-execution-context Database=clinical_trials \
+  --query-string "SELECT s.nct_id, s.brief_title, t.brief_summary, t.detailed_description, t.eligibility_criteria FROM studies s LEFT JOIN study_text t ON t.nct_id = s.nct_id WHERE s.nct_id = '$ID'" \
+  --query QueryExecutionId --output text)
+sleep 5
+aws s3 cp "$(aws athena get-query-execution --query-execution-id $Q --query QueryExecution.ResultConfiguration.OutputLocation --output text)" -
 ```
 
 DuckDB on a laptop, straight from S3:
