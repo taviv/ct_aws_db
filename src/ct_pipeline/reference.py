@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 import urllib3
 from urllib3.util.retry import Retry
 
-from . import umls
+from . import llm, umls
 from .config import CURRENT_KEY, REFERENCE_CURRENT_KEY, REFERENCE_PREFIX
 from .db import connect
 
@@ -78,6 +78,17 @@ SCHEMAS = {
         "label": "VARCHAR",
         "match_type": "VARCHAR",
         "source": "VARCHAR",
+    },
+    "condition_llm_codes": {
+        "nct_id": "VARCHAR",
+        "code_system": "VARCHAR",
+        "code": "VARCHAR",
+        "match_type": "VARCHAR",
+        "confidence": "VARCHAR",
+        "evidence": "VARCHAR",
+        "model": "VARCHAR",
+        "prompt_version": "VARCHAR",
+        "coded_at": "VARCHAR",
     },
     "condition_text_rules": {
         "pattern": "VARCHAR",
@@ -495,12 +506,16 @@ def build_reference(
         umls_info |= {"rows": {s: len(sources[s]) for s in umls.SOURCES} | {"text": len(text_map)}, **dropped_umls}
     if dropped["curated"]:
         raise ValueError(f"mesh_overrides.csv has {dropped['curated']} codes not in ICD-10-CM")
+    llm_cache = (store.get_json(llm.CACHE_KEY) or {}).get("entries", {})
+    categories = {r["code"]: r["description"] for r in icd_rows if r["level"] == "category"}
+    llm_codes = llm.llm_code_rows(llm_cache, categories)
 
     tables = {
         "icd10cm_codes": icd_rows,
         "condition_code_map": code_map,
         "condition_text_map": text_map,
         "condition_text_rules": rules,
+        "condition_llm_codes": llm_codes,
     }
     con = connect(work)
     keys = {}
@@ -523,6 +538,7 @@ def build_reference(
             "wikidata": {"url": WIKIDATA_SPARQL_URL, "rows": len(wikidata), "dropped_invalid": dropped["wikidata"]},
             "curated": {"mesh_overrides": len(overrides), "text_rules": len(rules)},
             "umls": umls_info,
+            "llm": {"cache": llm.CACHE_KEY, "studies": len(llm_cache), "rows": len(llm_codes)},
         },
     }
     store.put_json(REFERENCE_CURRENT_KEY, pointer)

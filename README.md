@@ -61,7 +61,9 @@ src/ct_pipeline/      one package, four Lambda handlers (handlers.py)
   glue.py             registers the snapshot in the Glue catalog
   db.py               DuckDB connections that spill only under CT_WORK_DIR
   verify.py           data integrity checks behind `make verify`
+  llm.py              LLM condition coding (Bedrock) for studies without an exact code
 scripts/condition_stats.py  condition-coding coverage per phase behind `make condition-stats`
+scripts/llm_code.py   LLM coding runs and evaluation behind `make llm-eval` / `make llm-code`
 statemachine/         Step Functions definition (ASL)
 template.yaml         SAM template: buckets, functions, state machine, schedule, CloudFront, Athena
 dashboard/            static dashboards (Chart.js)
@@ -125,6 +127,24 @@ resume on the next. Each term's UMLS codes are collapsed to their common parent 
 category (e.g. R11.1 and R11.10 → R11.1); codes spanning categories are dropped as ambiguous. UMLS and SNOMED CT content is licensed: it stays in the private data bucket, and
 only the derived ICD-10-CM codes (public domain) appear in `study_condition_codes`. For local runs, set
 `UMLS_API_KEY` in the environment.
+
+**LLM tier (optional, Amazon Bedrock).** For studies with no exact ICD-10-CM code, `scripts/llm_code.py` sends
+the protocol (titles, conditions, interventions, summary and eligibility criteria, long text truncated) to a
+Bedrock model together with the full ICD-10-CM category list as a cached system prompt. The model must pick
+categories from that list and quote the protocol text supporting each one; answers whose quote is not in the
+protocol are not published. Answers are cached per study in `reference/llm_cache.json`, keyed by a hash of the
+model input, so reruns only send new or changed studies. Codes are category level (e.g. C34, E11); `low`
+confidence is published as `match_type='broad'`. LLM codes never replace an exact code.
+
+```bash
+make llm-eval MODEL=<model or inference-profile id>                     # scorecard: ~300 studies with exact MeSH codes
+make llm-code MODEL=<model or inference-profile id> ARGS="--limit 1000" # code studies without an exact code (resumable)
+make reference                                                          # publish them as via='llm'
+```
+
+`ARGS="--review answers.csv"` writes every answer to a CSV; `--price-in/--price-out/--price-cache-read/
+--price-cache-write` (USD per million tokens) add a cost estimate. In CloudShell, start long runs detached:
+`setsid nohup make llm-code MODEL=... > llm.log 2>&1 < /dev/null &`, then `tail -3 llm.log`.
 
 ## Deploy
 

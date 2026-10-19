@@ -74,6 +74,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
       via='text'          a curated rule matches a free-text condition name (e.g. healthy volunteers → Z00.6),
                           or, for studies with no other ICD-10-CM code, the normalized name is in
                           condition_text_map (UMLS)
+      via='llm'           for studies with no exact ICD-10-CM code yet: categories an LLM selected from the
+                          protocol text with verified quoted evidence (condition_llm_codes, see llm.py)
       via='mesh_ancestor' fallback for studies with no ICD-10-CM code yet: the most specific code reachable
                           from a MeSH ancestor; always match_type='broad'
     Expects study_conditions and condition_mesh_terms views (attach_snapshot).
@@ -108,10 +110,24 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             WHERE c.nct_id NOT IN (SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'
                                    UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM')
         ),
+        exact_coded AS (
+            SELECT nct_id FROM direct WHERE code_system = 'ICD10CM' AND match_type = 'exact'
+            UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM' AND match_type = 'exact'
+            UNION SELECT nct_id FROM text_map WHERE code_system = 'ICD10CM' AND match_type = 'exact'
+        ),
+        llm AS (
+            SELECT DISTINCT l.nct_id, l.code_system, l.code, NULL::VARCHAR AS label, 'llm' AS via,
+                   NULL::VARCHAR AS mesh_id, NULL::VARCHAR AS mesh_term, NULL::VARCHAR AS condition_name,
+                   l.match_type, 'llm' AS source
+            FROM {ref["condition_llm_codes"]} l
+            WHERE l.nct_id IN (SELECT nct_id FROM study_conditions)
+              AND l.nct_id NOT IN (SELECT nct_id FROM exact_coded)
+        ),
         coded AS (
             SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'
             UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM'
             UNION SELECT nct_id FROM text_map WHERE code_system = 'ICD10CM'
+            UNION SELECT nct_id FROM llm
         ),
         ancestor AS (
             SELECT DISTINCT t.nct_id, m.code_system, m.code, m.label, 'mesh_ancestor' AS via, t.mesh_id,
@@ -128,7 +144,7 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
         ),
         coded_all AS (
             SELECT * FROM direct UNION ALL SELECT * FROM text UNION ALL SELECT * FROM text_map
-            UNION ALL SELECT * FROM best_ancestor
+            UNION ALL SELECT * FROM llm UNION ALL SELECT * FROM best_ancestor
         )
         SELECT a.nct_id, a.code_system, a.code, coalesce(i.description, a.label) AS label,
                i.chapter AS icd10_chapter, i.block AS icd10_block, i.category AS icd10_category,

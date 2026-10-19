@@ -76,7 +76,7 @@ def main() -> None:
 
         base = [r for r in rows(con, before / "condition_code_map" / "data.parquet") if r["source"] not in umls.SOURCES]
         after = work / "after"
-        for name in ("icd10cm_codes", "condition_text_rules"):
+        for name in ("icd10cm_codes", "condition_text_rules", "condition_llm_codes"):
             (after / name).mkdir(parents=True)
             (after / name / "data.parquet").write_bytes((before / name / "data.parquet").read_bytes())
         code_map, dropped = combine_maps(icd_codes, {"base": base, **maps})

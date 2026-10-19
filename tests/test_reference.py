@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 import duckdb
 import pytest
 
+from ct_pipeline import llm
 from ct_pipeline import reference as R
 from ct_pipeline.build import build_snapshot, recode_snapshot
 from ct_pipeline.config import CURRENT_KEY, OVERVIEW_KEY, REFERENCE_CURRENT_KEY
@@ -284,3 +285,61 @@ def test_recode_applies_new_reference_without_refetch(settings, store, site_stor
     overview = site_store.get_json(OVERVIEW_KEY)["by_phase"]["ALL"]
     assert overview["icd10_chapters"]["rows"] == [["Health status and services (Z00-Z99)", 1]]
     assert [r[0][:3] for r in overview["top_icd10_categories"]["rows"]] == ["Z00"]
+
+
+def test_build_adds_llm_codes_only_for_studies_without_exact_codes(settings, store, site_store, curated):
+    answer = {"code": "C34", "confidence": "high", "evidence": "lung", "evidence_found": True}
+    entry = {"model": "m", "prompt": "v1", "at": "2026-10-14T00:00:00+00:00", "codes": [answer]}
+    store.put_json(llm.CACHE_KEY, {"entries": {"NCT1": entry, "NCT4": entry}})
+    pointer = R.build_reference(store, settings.work_dir, get=fake_get())
+    assert pointer["row_counts"]["condition_llm_codes"] == 2
+    studies = [_study("NCT1", ["NSCLC"], meshes=[("D008175", "Lung Neoplasms")]), _study("NCT4", ["Something rare"])]
+    _build(settings, store, site_store, "R1", studies)
+    codes = {(n, c, via): m for n, s, c, via, m, _ in _codes(store) if s == "ICD10CM"}
+    assert codes[("NCT4", "C34", "llm")] == "exact"
+    assert ("NCT1", "C34", "mesh") in codes and ("NCT1", "C34", "llm") not in codes
+
+
+def test_llm_code_script_eval_and_code(settings, store, site_store, curated, monkeypatch, capsys, tmp_path):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    R.build_reference(store, settings.work_dir, get=fake_get())
+    studies = [_study("NCT1", ["NSCLC"], meshes=[("D008175", "Lung Neoplasms")]), _study("NCT4", ["Something rare"])]
+    _build(settings, store, site_store, "R1", studies)
+    spec = importlib.util.spec_from_file_location("llm_code", Path(__file__).parents[1] / "scripts" / "llm_code.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    class Client:
+        def converse(self, **kw):
+            answer = {"codes": [{"code": "C34", "evidence": "Study", "confidence": "high"}]}
+            content = [{"toolUse": {"name": llm.TOOL_NAME, "input": answer}}]
+            return {"output": {"message": {"content": content}}, "usage": {"inputTokens": 10, "outputTokens": 2}}
+
+    monkeypatch.setattr(mod, "make_coder", lambda model, catalog: llm.BedrockCoder(model, catalog, client=Client()))
+    review = tmp_path / "review.csv"
+    argv = [
+        "llm_code.py",
+        "eval",
+        "--model",
+        "m",
+        "--data",
+        str(store.root),
+        "--review",
+        str(review),
+        "--price-in",
+        "1",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    mod.main()
+    out = capsys.readouterr().out
+    assert ">=1 category agrees with MeSH        100.0%" in out
+    assert "estimated cost $0.00" in out
+    assert review.read_text().splitlines()[1].startswith("NCT1,")
+
+    monkeypatch.setattr(sys, "argv", ["llm_code.py", "code", "--model", "m", "--data", str(store.root)])
+    mod.main()
+    assert "1 studies have no exact ICD-10-CM code" in capsys.readouterr().out
+    assert set(store.get_json(llm.CACHE_KEY)["entries"]) == {"NCT4"}
