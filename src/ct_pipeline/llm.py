@@ -25,6 +25,8 @@ MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 3000
 MAX_CODES = 5
 CONFIDENCE = ("high", "medium", "low")
+# categories that name no specific site; always low confidence, so published as broad
+CATCH_ALL = ("C76", "C79", "C80", "C96")
 WORKERS = 4
 CHUNK = 50
 TOOL_NAME = "record_icd10cm"
@@ -186,6 +188,8 @@ def validate(answer: dict, categories: dict, text: str) -> list:
             continue
         seen.add(code)
         confidence = item.get("confidence") if item.get("confidence") in CONFIDENCE else "low"
+        if code in CATCH_ALL:
+            confidence = "low"
         evidence = str(item.get("evidence") or "")
         out.append(
             {
@@ -317,7 +321,7 @@ def llm_code_rows(cache_entries: dict, categories: dict) -> list:
                         "nct_id": nct_id,
                         "code_system": "ICD10CM",
                         "code": c["code"],
-                        "match_type": "broad" if c["confidence"] == "low" else "exact",
+                        "match_type": "broad" if c["confidence"] == "low" or c["code"] in CATCH_ALL else "exact",
                         "confidence": c["confidence"],
                         "evidence": c["evidence"][:1000],
                         "model": e.get("model"),

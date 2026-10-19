@@ -134,7 +134,8 @@ Bedrock model together with the full ICD-10-CM category list as a cached system 
 categories from that list and quote the protocol text supporting each one; answers whose quote is not in the
 protocol are not published. Answers are cached per study in `reference/llm_cache.json`, keyed by a hash of the
 model input, so reruns only send new or changed studies. Codes are category level (e.g. C34, E11); `low`
-confidence is published as `match_type='broad'`. LLM codes never replace an exact code.
+confidence and the catch-all categories C76, C79, C80 and C96 (no specific site) are published as
+`match_type='broad'`. LLM codes never replace an exact code.
 
 ```bash
 make llm-eval MODEL=<model or inference-profile id>                     # scorecard: ~300 studies with exact MeSH codes
