@@ -344,6 +344,14 @@ def test_llm_code_script_eval_and_code(settings, store, site_store, curated, mon
     assert "1 studies have no exact ICD-10-CM code" in capsys.readouterr().out
     assert set(store.get_json(llm.CACHE_KEY)["entries"]) == {"NCT4"}
 
+    code = ["llm_code.py", "code", "--model", "m", "--data", str(store.root), "--phase"]
+    monkeypatch.setattr(sys, "argv", code + [" phase1,"])
+    mod.main()
+    assert "1 studies in PHASE1 have no exact ICD-10-CM code" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", code + ["PHASE1,PHASE2/PHASE3"])
+    with pytest.raises(SystemExit, match="Unknown --phase PHASE2/PHASE3; choose from PHASE1"):
+        mod.main()
+
 
 def test_llm_code_script_try_mode(settings, store, site_store, curated, monkeypatch, capsys, tmp_path):
     import importlib.util

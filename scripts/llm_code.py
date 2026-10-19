@@ -5,7 +5,7 @@ LLM tier for condition coding (ROADMAP.md phase 1, steps 4-5), run from AWS Clou
   make llm-eval MODEL=<id> [ARGS="--sample 300"]
       Codes a sample of studies that already have exact MeSH-derived ICD-10-CM codes (never shown to the model)
       and prints a scorecard. Writes only its own cache, reference/llm_eval_cache.json.
-  make llm-code MODEL=<id> [ARGS="--limit 1000"]
+  make llm-code MODEL=<id> [ARGS="--phase PHASE3,PHASE2/PHASE3 --limit 1000"]
       Codes studies with no exact ICD-10-CM code into reference/llm_cache.json (resumable: rerun to continue).
       `make reference` then publishes them in study_condition_codes as via='llm'.
 
@@ -37,7 +37,7 @@ TABLES = ("studies", "study_text", "study_conditions", "study_interventions", "s
 GOLD_SQL = """
     SELECT nct_id, list_sort(list(DISTINCT icd10_category)) AS gold FROM study_condition_codes
     WHERE code_system = 'ICD10CM' AND via = 'mesh' AND match_type = 'exact'
-      AND icd10_category IS NOT NULL AND icd10_category <> 'Z00'
+      AND icd10_category IS NOT NULL AND icd10_category <> 'Z00' {phase}
     GROUP BY 1 ORDER BY hash(nct_id || ?) LIMIT ?
 """
 VAGUE_CONDITION = (
@@ -46,11 +46,13 @@ VAGUE_CONDITION = (
 )
 AMBIGUOUS_SQL = f"""
     SELECT s.nct_id FROM studies s
-    WHERE s.phase_group = ? AND s.nct_id IN ({llm.TARGETS_SQL})
+    WHERE list_contains(?::VARCHAR[], s.phase_group) AND s.nct_id IN ({llm.TARGETS_SQL})
       AND EXISTS (SELECT 1 FROM study_conditions c
                   WHERE c.nct_id = s.nct_id AND regexp_matches(lower(trim(c.condition_name)), ?))
     ORDER BY hash(s.nct_id || ?) LIMIT ?
 """
+CODE_SQL = f"SELECT nct_id FROM ({llm.TARGETS_SQL}) WHERE TRUE {{phase}} ORDER BY nct_id"
+PHASE_FILTER = "AND nct_id IN (SELECT nct_id FROM studies WHERE list_contains(?::VARCHAR[], phase_group))"
 CURRENT_CODES_SQL = """
     SELECT nct_id, array_to_string(list_sort(list(DISTINCT code || ' (' || match_type || ')')), ', ')
     FROM study_condition_codes WHERE code_system = 'ICD10CM' AND nct_id IN (SELECT unnest(?::VARCHAR[]))
@@ -111,11 +113,15 @@ def write_review(path, docs, entries, gold=None) -> None:
     print(f"\nWrote {path}")
 
 
-def try_studies(con, coder, categories, args) -> dict:
+def phase_filter(phases: list) -> tuple:
+    return (PHASE_FILTER, [phases]) if phases else ("", [])
+
+
+def try_studies(con, coder, categories, args, phases) -> dict:
     if args.ids:
         ids = sorted({i.strip().upper() for i in args.ids.split(",") if i.strip()})
     else:
-        params = [args.phase, VAGUE_CONDITION, args.seed, args.limit or 10]
+        params = [phases, VAGUE_CONDITION, args.seed, args.limit or 10]
         ids = [r[0] for r in con.execute(AMBIGUOUS_SQL, params).fetchall()]
     docs = llm.study_documents(con, ids)
     missing = sorted(set(ids) - {d["nct_id"] for d in docs})
@@ -170,7 +176,7 @@ def try_studies(con, coder, categories, args) -> dict:
             for d, now, codes, reason, text in rows:
                 base = [
                     d["nct_id"],
-                    args.phase if not args.ids else "",
+                    ",".join(phases) if not args.ids else "",
                     d["brief_title"],
                     "; ".join(d["conditions"]),
                     now,
@@ -225,7 +231,10 @@ def main() -> None:
     ap.add_argument("--seed", default="1")
     ap.add_argument("--limit", type=int, help="code: at most this many studies (in NCT order); try: default 10")
     ap.add_argument("--ids", help="try: comma-separated NCT IDs instead of a random ambiguous sample")
-    ap.add_argument("--phase", default="PHASE3", help="try: phase_group to sample from, e.g. PHASE1, PHASE2/PHASE3")
+    ap.add_argument(
+        "--phase",
+        help="comma-separated phase_group values, e.g. PHASE3,PHASE2/PHASE3 (eval/code: default all; try: PHASE3)",
+    )
     ap.add_argument(
         "--fields",
         default="brief_summary",
@@ -259,15 +268,23 @@ def main() -> None:
         icd = work / "reference" / "icd10cm_codes" / "data.parquet"
         catalog, categories = llm.category_catalog(con, icd)
         coder = make_coder(args.model, catalog)
+        phases = [p.strip().upper() for p in (args.phase or "").split(",") if p.strip()]
+        known = {r[0] for r in con.execute("SELECT DISTINCT phase_group FROM studies").fetchall()}
+        if set(phases) - known:
+            sys.exit(
+                f"Unknown --phase {', '.join(sorted(set(phases) - known))}; choose from {', '.join(sorted(known))}"
+            )
+        where, params = phase_filter(phases)
+        in_phases = f" in {', '.join(phases)}" if phases else ""
         progress = lambda d, n: print(f"  {d:,}/{n:,}", flush=True)  # noqa: E731
 
         if args.mode == "try":
             print(f"Snapshot {current['run_id']}", flush=True)
-            usage = try_studies(con, coder, categories, args)
+            usage = try_studies(con, coder, categories, args, phases or ["PHASE3"])
             print(f"Tokens: {usage_line(usage, args)}")
             return
         if args.mode == "eval":
-            gold = dict(con.execute(GOLD_SQL, [args.seed, args.sample]).fetchall())
+            gold = dict(con.execute(GOLD_SQL.format(phase=where), params + [args.seed, args.sample]).fetchall())
             docs = llm.study_documents(con, sorted(gold))
             print(f"Snapshot {current['run_id']}: coding {len(docs):,} studies with {args.model}", flush=True)
             entries, info = llm.code_studies(
@@ -278,8 +295,11 @@ def main() -> None:
             )
             scorecard(docs, entries, gold, chapters)
         else:
-            ids = [r[0] for r in con.execute(llm.TARGETS_SQL).fetchall()]
-            print(f"Snapshot {current['run_id']}: {len(ids):,} studies have no exact ICD-10-CM code", flush=True)
+            ids = [r[0] for r in con.execute(CODE_SQL.format(phase=where), params).fetchall()]
+            print(
+                f"Snapshot {current['run_id']}: {len(ids):,} studies{in_phases} have no exact ICD-10-CM code",
+                flush=True,
+            )
             ids = ids[: args.limit] if args.limit else ids
             docs = llm.study_documents(con, ids)
             print(f"Coding {len(docs):,} with {args.model} (cached answers are reused)", flush=True)
