@@ -343,3 +343,49 @@ def test_llm_code_script_eval_and_code(settings, store, site_store, curated, mon
     mod.main()
     assert "1 studies have no exact ICD-10-CM code" in capsys.readouterr().out
     assert set(store.get_json(llm.CACHE_KEY)["entries"]) == {"NCT4"}
+
+
+def test_llm_code_script_try_mode(settings, store, site_store, curated, monkeypatch, capsys, tmp_path):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    R.build_reference(store, settings.work_dir, get=fake_get())
+    studies = [
+        _study("NCT1", ["NSCLC"], meshes=[("D008175", "Lung Neoplasms")]),
+        _study("NCT4", ["Something rare"]),
+        _study("NCT5", ["Advanced Solid Tumors"]),
+    ]
+    _build(settings, store, site_store, "R1", studies)
+    spec = importlib.util.spec_from_file_location("llm_code", Path(__file__).parents[1] / "scripts" / "llm_code.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sent = []
+
+    class Client:
+        def converse(self, **kw):
+            sent.append(kw["messages"][0]["content"][0]["text"])
+            answer = {"codes": [{"code": "C34.1", "evidence": "Study", "confidence": "high"}]}
+            content = [{"toolUse": {"name": llm.TOOL_NAME, "input": answer}}]
+            return {"output": {"message": {"content": content}}, "usage": {"inputTokens": 10, "outputTokens": 2}}
+
+    monkeypatch.setattr(mod, "make_coder", lambda model, catalog: llm.BedrockCoder(model, catalog, client=Client()))
+    base = ["llm_code.py", "try", "--model", "m", "--data", str(store.root)]
+    monkeypatch.setattr(sys, "argv", base + ["--phase", "PHASE1"])
+    mod.main()
+    out = capsys.readouterr().out
+    assert "NCT5 " in out and "NCT4 " not in out and "NCT1 " not in out
+    assert "LLM:        C34" in out and "text fields sent: brief_summary" in out
+
+    review = tmp_path / "try.csv"
+    argv = base + ["--ids", "nct4,NCT9", "--fields", "brief_summary,eligibility_criteria", "--review", str(review)]
+    monkeypatch.setattr(sys, "argv", argv)
+    mod.main()
+    assert "Not in the snapshot: NCT9" in capsys.readouterr().out
+    rows = review.read_text().splitlines()
+    assert rows[0].startswith("nct_id,phase,title,conditions,current_codes,llm_code") and rows[1].startswith("NCT4,")
+    assert not store.list_keys("reference/llm")
+
+    monkeypatch.setattr(sys, "argv", base + ["--fields", "summary"])
+    with pytest.raises(SystemExit, match="Unknown --fields summary"):
+        mod.main()

@@ -152,8 +152,11 @@ def test_targets_and_documents():
     con = duckdb.connect()
     con.execute("CREATE TABLE studies (nct_id VARCHAR, brief_title VARCHAR, official_title VARCHAR)")
     con.execute("INSERT INTO studies VALUES ('NCT1','a',NULL), ('NCT2','b',NULL), ('NCT3','c',NULL), ('NCT4','d',NULL)")
-    con.execute("CREATE TABLE study_text (nct_id VARCHAR, brief_summary VARCHAR, eligibility_criteria VARCHAR)")
-    con.execute("INSERT INTO study_text VALUES ('NCT2', 'summary', NULL)")
+    con.execute(
+        "CREATE TABLE study_text (nct_id VARCHAR, brief_summary VARCHAR, detailed_description VARCHAR,"
+        " eligibility_criteria VARCHAR)"
+    )
+    con.execute("INSERT INTO study_text VALUES ('NCT2', 'summary', NULL, NULL)")
     con.execute("CREATE TABLE study_conditions (nct_id VARCHAR, condition_name VARCHAR)")
     con.execute("INSERT INTO study_conditions VALUES ('NCT2','Tumor'), ('NCT2','Cancer'), ('NCT2','Cancer')")
     con.execute("CREATE TABLE study_interventions (nct_id VARCHAR, intervention_type VARCHAR, name VARCHAR)")
@@ -169,3 +172,13 @@ def test_targets_and_documents():
     assert doc["interventions"] == ["DRUG: X", "Y"]
     assert doc["brief_summary"] == "summary" and doc["eligibility_criteria"] is None
     assert [d["nct_id"] for d in llm.study_documents(con)] == ["NCT1", "NCT2", "NCT3", "NCT4"]
+
+
+def test_render_study_sends_only_the_chosen_text_fields():
+    assert "Summary:\nA phase 1" in llm.render_study(DOC) and "Eligibility criteria:\nInclusion" in llm.render_study(
+        DOC
+    )
+    doc = {**DOC, "detailed_description": "Part B enrolls gastric cancer."}
+    text = llm.render_study(doc, ("detailed_description",))
+    assert "Detailed description:\nPart B enrolls gastric cancer." in text
+    assert "Summary:" not in text and "Eligibility" not in text

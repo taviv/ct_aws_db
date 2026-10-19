@@ -112,7 +112,7 @@ def study_documents(con, nct_ids=None) -> list:
                          FROM study_conditions c WHERE c.nct_id = s.nct_id), []) AS conditions,
                coalesce((SELECT list_sort(list_distinct(list(coalesce(i.intervention_type || ': ', '') || i.name)))
                          FROM study_interventions i WHERE i.nct_id = s.nct_id), []) AS interventions,
-               t.brief_summary, t.eligibility_criteria
+               t.brief_summary, t.detailed_description, t.eligibility_criteria
         FROM studies s LEFT JOIN study_text t USING (nct_id)
         {where}
         ORDER BY s.nct_id
@@ -125,17 +125,25 @@ def _truncate(text, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + " [...]"
 
 
-def render_study(doc: dict) -> str:
+TEXT_FIELDS = {
+    "brief_summary": ("Summary", MAX_SUMMARY_CHARS),
+    "detailed_description": ("Detailed description", MAX_SUMMARY_CHARS),
+    "eligibility_criteria": ("Eligibility criteria", MAX_ELIGIBILITY_CHARS),
+}
+DEFAULT_FIELDS = ("brief_summary", "eligibility_criteria")
+
+
+def render_study(doc: dict, fields=DEFAULT_FIELDS) -> str:
     parts = [f"Title: {doc.get('brief_title') or ''}"]
     if doc.get("official_title") and doc["official_title"] != doc.get("brief_title"):
         parts.append(f"Official title: {doc['official_title']}")
     parts.append("Conditions: " + "; ".join(doc.get("conditions") or []))
     if doc.get("interventions"):
         parts.append("Interventions: " + "; ".join(doc["interventions"]))
-    if doc.get("brief_summary"):
-        parts.append("Summary:\n" + _truncate(doc["brief_summary"], MAX_SUMMARY_CHARS))
-    if doc.get("eligibility_criteria"):
-        parts.append("Eligibility criteria:\n" + _truncate(doc["eligibility_criteria"], MAX_ELIGIBILITY_CHARS))
+    for field in fields:
+        heading, limit = TEXT_FIELDS[field]
+        if doc.get(field):
+            parts.append(f"{heading}:\n" + _truncate(doc[field], limit))
     return "\n\n".join(parts)
 
 

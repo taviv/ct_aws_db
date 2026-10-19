@@ -9,6 +9,10 @@ LLM tier for condition coding (ROADMAP.md phase 1, steps 4-5), run from AWS Clou
       Codes studies with no exact ICD-10-CM code into reference/llm_cache.json (resumable: rerun to continue).
       `make reference` then publishes them in study_condition_codes as via='llm'.
 
+  make llm-try MODEL=<id> [ARGS="--phase PHASE3 --limit 10 --fields brief_summary"]
+      Small manual test: codes a few ambiguous studies (no exact code, vague condition name like "Solid Tumors") from
+      only the chosen text fields and prints a table; --ids NCT1,NCT2 picks the studies. Writes no cache.
+
 MODEL is a Bedrock model or inference-profile id. --review FILE also writes every answer to a CSV for spot checks.
 --price-* (USD per million tokens) turn the token counts into a cost estimate.
 """
@@ -35,6 +39,22 @@ GOLD_SQL = """
     WHERE code_system = 'ICD10CM' AND via = 'mesh' AND match_type = 'exact'
       AND icd10_category IS NOT NULL AND icd10_category <> 'Z00'
     GROUP BY 1 ORDER BY hash(nct_id || ?) LIMIT ?
+"""
+VAGUE_CONDITION = (
+    r"^((advanced|metastatic|locally advanced|recurrent|refractory|unresectable|other)[ ,/]+)*"
+    r"(solid )?(tumou?rs?|cancers?|neoplasms?|malignanc(y|ies)|carcinomas?)$"
+)
+AMBIGUOUS_SQL = f"""
+    SELECT s.nct_id FROM studies s
+    WHERE s.phase_group = ? AND s.nct_id IN ({llm.TARGETS_SQL})
+      AND EXISTS (SELECT 1 FROM study_conditions c
+                  WHERE c.nct_id = s.nct_id AND regexp_matches(lower(trim(c.condition_name)), ?))
+    ORDER BY hash(s.nct_id || ?) LIMIT ?
+"""
+CURRENT_CODES_SQL = """
+    SELECT nct_id, array_to_string(list_sort(list(DISTINCT code || ' (' || match_type || ')')), ', ')
+    FROM study_condition_codes WHERE code_system = 'ICD10CM' AND nct_id IN (SELECT unnest(?::VARCHAR[]))
+    GROUP BY 1
 """
 
 
@@ -91,6 +111,82 @@ def write_review(path, docs, entries, gold=None) -> None:
     print(f"\nWrote {path}")
 
 
+def try_studies(con, coder, categories, args) -> dict:
+    if args.ids:
+        ids = sorted({i.strip().upper() for i in args.ids.split(",") if i.strip()})
+    else:
+        params = [args.phase, VAGUE_CONDITION, args.seed, args.limit or 10]
+        ids = [r[0] for r in con.execute(AMBIGUOUS_SQL, params).fetchall()]
+    docs = llm.study_documents(con, ids)
+    missing = sorted(set(ids) - {d["nct_id"] for d in docs})
+    if missing:
+        print("Not in the snapshot:", ", ".join(missing))
+    current = dict(con.execute(CURRENT_CODES_SQL, [ids]).fetchall()) if ids else {}
+    fields = tuple(f.strip() for f in args.fields.split(",") if f.strip())
+    print(f"Coding {len(docs)} studies with {args.model}, text fields sent: {', '.join(fields) or 'none'}\n")
+    usage, rows = {}, []
+    for d in docs:
+        text = llm.render_study(d, fields)
+        try:
+            answer, used = coder.code(text)
+        except Exception as e:  # noqa: BLE001 - show the error for this study and continue
+            answer, used = {"no_code_reason": f"ERROR {type(e).__name__}: {e}"}, {}
+        for k, v in used.items():
+            usage[k] = usage.get(k, 0) + v
+        codes = llm.validate(answer, categories, text)
+        rows.append((d, current.get(d["nct_id"], ""), codes, str(answer.get("no_code_reason") or ""), text))
+    for d, now, codes, reason, _ in rows:
+        print(f"{d['nct_id']}  {d['brief_title'][:90]}")
+        print(f"  conditions: {'; '.join(d['conditions'])[:110]}")
+        print(f"  current:    {now or '-'}")
+        for c in codes:
+            mark = "quote found" if c["evidence_found"] else "QUOTE NOT FOUND"
+            print(f"  LLM:        {c['code']:4} {categories[c['code']][:55]:55} {c['confidence']:6} {mark}")
+            print(f'              "{c["evidence"][:100]}"')
+        if not codes:
+            print(f"  LLM:        no code - {reason[:100]}")
+        print()
+    if args.review:
+        with open(args.review, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(
+                [
+                    "nct_id",
+                    "phase",
+                    "title",
+                    "conditions",
+                    "current_codes",
+                    "llm_code",
+                    "llm_label",
+                    "confidence",
+                    "quote_found",
+                    "evidence",
+                    "no_code_reason",
+                    "fields_sent",
+                    "model_input",
+                    "your_check",
+                ]
+            )
+            for d, now, codes, reason, text in rows:
+                base = [
+                    d["nct_id"],
+                    args.phase if not args.ids else "",
+                    d["brief_title"],
+                    "; ".join(d["conditions"]),
+                    now,
+                ]
+                tail = [reason, " ".join(fields), text, ""]
+                for c in codes or [None]:
+                    cols = (
+                        [c["code"], categories[c["code"]], c["confidence"], c["evidence_found"], c["evidence"]]
+                        if c
+                        else [""] * 5
+                    )
+                    w.writerow(base + cols + tail)
+        print(f"Wrote {args.review} (one row per LLM code; fill in your_check)")
+    return usage
+
+
 def scorecard(docs, entries, gold: dict, chapters: dict) -> None:
     n = len(entries)
     if not n:
@@ -121,13 +217,20 @@ def scorecard(docs, entries, gold: dict, chapters: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("eval", "code"))
+    ap.add_argument("mode", choices=("eval", "code", "try"))
     ap.add_argument("--model", required=True, help="Bedrock model or inference-profile id")
     ap.add_argument("--stack", default="ct-pipeline")
     ap.add_argument("--data", help="local data directory instead of the stack's data bucket")
     ap.add_argument("--sample", type=int, default=300, help="eval: number of studies")
     ap.add_argument("--seed", default="1")
-    ap.add_argument("--limit", type=int, help="code: at most this many studies (in NCT order)")
+    ap.add_argument("--limit", type=int, help="code: at most this many studies (in NCT order); try: default 10")
+    ap.add_argument("--ids", help="try: comma-separated NCT IDs instead of a random ambiguous sample")
+    ap.add_argument("--phase", default="PHASE3", help="try: phase_group to sample from, e.g. PHASE1, PHASE2/PHASE3")
+    ap.add_argument(
+        "--fields",
+        default="brief_summary",
+        help=f"try: comma-separated text fields to send, from {', '.join(llm.TEXT_FIELDS)}",
+    )
     ap.add_argument("--workers", type=int, default=llm.WORKERS)
     ap.add_argument("--review", help="write answers to this CSV")
     for name in ("in", "out", "cache-read", "cache-write"):
@@ -135,6 +238,9 @@ def main() -> None:
     args = ap.parse_args()
     if not args.model:
         sys.exit("Set MODEL to a Bedrock model or inference-profile id (see README: LLM tier)")
+    unknown = {f.strip() for f in args.fields.split(",") if f.strip()} - set(llm.TEXT_FIELDS)
+    if unknown:
+        sys.exit(f"Unknown --fields {', '.join(sorted(unknown))}; choose from {', '.join(llm.TEXT_FIELDS)}")
 
     store = open_data(args)
     current = store.get_json(CURRENT_KEY)
@@ -155,6 +261,11 @@ def main() -> None:
         coder = make_coder(args.model, catalog)
         progress = lambda d, n: print(f"  {d:,}/{n:,}", flush=True)  # noqa: E731
 
+        if args.mode == "try":
+            print(f"Snapshot {current['run_id']}", flush=True)
+            usage = try_studies(con, coder, categories, args)
+            print(f"Tokens: {usage_line(usage, args)}")
+            return
         if args.mode == "eval":
             gold = dict(con.execute(GOLD_SQL, [args.seed, args.sample]).fetchall())
             docs = llm.study_documents(con, sorted(gold))
