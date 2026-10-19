@@ -55,6 +55,11 @@ _ICD10_CHAPTERS = [
 ]
 _ICD10_CHAPTER_LIST = "[" + ", ".join(f"'{c}'" for c in _ICD10_CHAPTERS) + "]"
 
+# Catch-all codes left out of the top-categories chart: secondary malignancy of unspecified site (Neoplasm Metastasis),
+# ill-defined head/face/neck site (head and neck cancers), unspecified non-Hodgkin lymphoma (generic Lymphoma) and
+# unspecified immune disorder (generic Immune System Diseases).
+_ICD10_CATCH_ALL = ("C79.9", "C76.0", "C85.9", "D89.9")
+
 
 def _healthy_pattern() -> str:
     """The curated healthy-volunteer rule (data/condition_text_rules.csv), so the chart and Z00.6 coding agree."""
@@ -75,12 +80,13 @@ OVERVIEW_QUERIES = {
         WHERE code_system = 'ICD10CM' AND icd10_chapter BETWEEN 1 AND {len(_ICD10_CHAPTERS)}
         GROUP BY icd10_chapter ORDER BY 2 DESC, 1
     """,
-    "top_icd10_categories": """
+    "top_icd10_categories": f"""
         SELECT icd10_category || ' ' || CASE WHEN length(l) > 45 THEN l[:44] || '…' ELSE l END AS label, value
         FROM (
             SELECT icd10_category, arg_min(label, length(code)) AS l, COUNT(DISTINCT nct_id) AS value
             FROM study_condition_codes SEMI JOIN s USING (nct_id)
             WHERE code_system = 'ICD10CM' AND icd10_category IS NOT NULL
+              AND code NOT IN ({", ".join(f"'{c}'" for c in _ICD10_CATCH_ALL)})
             GROUP BY icd10_category
         )
         ORDER BY 2 DESC, 1 LIMIT 15
