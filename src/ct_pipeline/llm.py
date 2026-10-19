@@ -25,6 +25,8 @@ MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 3000
 MAX_CODES = 5
 CONFIDENCE = ("high", "medium", "low")
+# categories that name no specific site; always low confidence, so published as broad
+CATCH_ALL = ("C76", "C79", "C80", "C96")
 WORKERS = 4
 CHUNK = 50
 TOOL_NAME = "record_icd10cm"
@@ -161,12 +163,14 @@ def input_hash(text: str, model_id: str) -> str:
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """Letters and digits only: quotes survive re-spacing, dropped list numbers/bullets and punctuation changes."""
+    text = re.sub(r"(?m)^\s*(?:[-*•]|\(?\d{1,2}[.)])\s+", " ", text)
+    return re.sub(r"[\W_]+", "", text).lower()
 
 
 def evidence_found(evidence: str, text: str) -> bool:
     haystack = _norm(text)
-    fragments = [_norm(f).strip(" \"'“”") for f in re.split(r"\.\.\.|…|;", evidence or "")]
+    fragments = [_norm(f) for f in re.split(r"\.\.\.|…|;", evidence or "")]
     fragments = [f for f in fragments if f]
     return bool(fragments) and all(f in haystack for f in fragments)
 
@@ -184,6 +188,8 @@ def validate(answer: dict, categories: dict, text: str) -> list:
             continue
         seen.add(code)
         confidence = item.get("confidence") if item.get("confidence") in CONFIDENCE else "low"
+        if code in CATCH_ALL:
+            confidence = "low"
         evidence = str(item.get("evidence") or "")
         out.append(
             {
@@ -315,7 +321,7 @@ def llm_code_rows(cache_entries: dict, categories: dict) -> list:
                         "nct_id": nct_id,
                         "code_system": "ICD10CM",
                         "code": c["code"],
-                        "match_type": "broad" if c["confidence"] == "low" else "exact",
+                        "match_type": "broad" if c["confidence"] == "low" or c["code"] in CATCH_ALL else "exact",
                         "confidence": c["confidence"],
                         "evidence": c["evidence"][:1000],
                         "model": e.get("model"),

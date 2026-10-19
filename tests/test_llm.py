@@ -75,7 +75,7 @@ def test_validate_keeps_catalog_categories_and_checks_evidence(catalog):
         ]
     }
     got = [(c["code"], c["confidence"], c["evidence_found"]) for c in llm.validate(answer, categories, text)]
-    assert got == [("C34", "high", True), ("C80", "medium", True), ("E11", "low", False)]
+    assert got == [("C34", "high", True), ("C80", "low", True), ("E11", "low", False)]
     assert llm.validate({"codes": None}, categories, text) == []
 
 
@@ -137,7 +137,7 @@ def test_llm_code_rows_keep_verified_evidence_only(catalog):
             "at": "2026-10-14T00:00:00+00:00",
             "codes": [
                 {"code": "C34", "confidence": "high", "evidence": "lung", "evidence_found": True},
-                {"code": "C80", "confidence": "low", "evidence": "tumor", "evidence_found": True},
+                {"code": "C80", "confidence": "high", "evidence": "tumor", "evidence_found": True},
                 {"code": "E11", "confidence": "high", "evidence": "made up", "evidence_found": False},
                 {"code": "C99", "confidence": "high", "evidence": "gone", "evidence_found": True},
             ],
@@ -194,3 +194,13 @@ def test_prompt_rules(catalog):
     system = llm.BedrockCoder("m", catalog[0], client=FakeBedrock(LUNG)).system
     assert "junction cancer is C16" in system and "never\nnext to site categories" in system
     assert "low = a generic fallback" in system
+
+
+def test_evidence_survives_list_numbers_and_spacing():
+    text = (
+        "Inclusion Criteria:\n\nHER2 negative\nadvanced cancer of the biliary tract -\n\n"
+        "1. Gallbladder cancer.\n2. HER2-positive"
+    )
+    assert llm.evidence_found("HER2 negative advanced cancer of the biliary tract - Gallbladder cancer", text)
+    assert llm.evidence_found("HER2negativeadvanced", text)
+    assert not llm.evidence_found("HER2 negative advanced cancer of the lung", text)
