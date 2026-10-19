@@ -123,6 +123,9 @@ def test_icd10_panel_queries():
         ('NCT1', 'ICD10CM', 'C34.1', 'Malignant neoplasm of upper lobe', 2, 'C34'),
         ('NCT2', 'ICD10CM', 'C34', 'Malignant neoplasm of bronchus and lung', 2, 'C34'),
         ('NCT2', 'ICD10CM', 'E11', 'Type 2 diabetes mellitus', 4, 'E11'),
+        ('NCT1', 'ICD10CM', 'C79.9', 'Secondary malignant neoplasm of unspecified site', 2, 'C79'),
+        ('NCT2', 'ICD10CM', 'C85.9', 'Non-Hodgkin lymphoma, unspecified', 2, 'C85'),
+        ('NCT2', 'ICD10CM', 'C85.1', 'Unspecified B-cell lymphoma', 2, 'C85'),
         ('NCT2', 'UMLS', 'x', 'x', NULL, NULL)
     ) t(nct_id, code_system, code, label, icd10_chapter, icd10_category)""")
     assert run_query(con, "icd10_chapters")["rows"] == [
@@ -131,8 +134,10 @@ def test_icd10_panel_queries():
     ]
     assert run_query(con, "top_icd10_categories", {"phase": "PHASE2"})["rows"] == [
         ["C34 Malignant neoplasm of bronchus and lung", 1],
+        ["C85 Unspecified B-cell lymphoma", 1],
         ["E11 Type 2 diabetes mellitus", 1],
     ]
+    assert "C79" not in [r[0][:3] for r in run_query(con, "top_icd10_categories")["rows"]]
 
 
 def test_top_conditions_merges_healthy_volunteer_names(settings, store, site_store):
