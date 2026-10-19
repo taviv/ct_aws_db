@@ -161,12 +161,14 @@ def input_hash(text: str, model_id: str) -> str:
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """Letters and digits only: quotes survive re-spacing, dropped list numbers/bullets and punctuation changes."""
+    text = re.sub(r"(?m)^\s*(?:[-*•]|\(?\d{1,2}[.)])\s+", " ", text)
+    return re.sub(r"[\W_]+", "", text).lower()
 
 
 def evidence_found(evidence: str, text: str) -> bool:
     haystack = _norm(text)
-    fragments = [_norm(f).strip(" \"'“”") for f in re.split(r"\.\.\.|…|;", evidence or "")]
+    fragments = [_norm(f) for f in re.split(r"\.\.\.|…|;", evidence or "")]
     fragments = [f for f in fragments if f]
     return bool(fragments) and all(f in haystack for f in fragments)
 

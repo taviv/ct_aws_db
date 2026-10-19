@@ -194,3 +194,13 @@ def test_prompt_rules(catalog):
     system = llm.BedrockCoder("m", catalog[0], client=FakeBedrock(LUNG)).system
     assert "junction cancer is C16" in system and "never\nnext to site categories" in system
     assert "low = a generic fallback" in system
+
+
+def test_evidence_survives_list_numbers_and_spacing():
+    text = (
+        "Inclusion Criteria:\n\nHER2 negative\nadvanced cancer of the biliary tract -\n\n"
+        "1. Gallbladder cancer.\n2. HER2-positive"
+    )
+    assert llm.evidence_found("HER2 negative advanced cancer of the biliary tract - Gallbladder cancer", text)
+    assert llm.evidence_found("HER2negativeadvanced", text)
+    assert not llm.evidence_found("HER2 negative advanced cancer of the lung", text)
