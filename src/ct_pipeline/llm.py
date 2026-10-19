@@ -19,14 +19,14 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 8000
 MAX_CODES = 8
 CONFIDENCE = ("high", "medium", "low")
 # categories that name no specific site; always low confidence, so published as broad
-CATCH_ALL = ("C76", "C79", "C80", "C96")
+CATCH_ALL = ("C76", "C77", "C78", "C79", "C80", "C96")
 WORKERS = 4
 CHUNK = 50
 TOOL_NAME = "record_icd10cm"
@@ -47,6 +47,8 @@ the eligibility criteria name; use C80 only if any solid tumor is eligible or no
 next to site categories just because a generic term like "Advanced Cancer" is listed. Use the most specific
 category the text supports, at most {max_codes} categories, the main condition first.
 Gastroesophageal (esophagogastric) junction cancer is C16 (cardia), not C15.
+Use the secondary-site categories C77-C79 only when the study targets the metastases themselves (e.g. brain
+metastases); "metastatic pancreatic cancer" is C25 alone.
 For every category, quote verbatim the protocol text that supports it (copy it exactly; use "..." between
 non-adjacent fragments).
 Confidence: high = the condition is named explicitly in the text; medium = inferred from indirect wording

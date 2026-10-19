@@ -145,6 +145,7 @@ def test_llm_code_rows_keep_verified_evidence_only(catalog):
     }
     rows = llm.llm_code_rows(entries, catalog[1])
     assert [(r["code"], r["match_type"]) for r in rows] == [("C34", "exact"), ("C80", "broad")]
+    assert {"C76", "C77", "C78", "C79", "C80", "C96"} == set(llm.CATCH_ALL)
     assert rows[0]["model"] == "m" and rows[0]["prompt_version"] == "v1"
 
 
@@ -193,6 +194,7 @@ def test_evidence_fragments_may_be_joined_with_semicolons():
 def test_prompt_rules(catalog):
     system = llm.BedrockCoder("m", catalog[0], client=FakeBedrock(LUNG)).system
     assert "junction cancer is C16" in system and "never\nnext to site categories" in system
+    assert "C77-C79 only when the study targets the metastases" in system
     assert "low = a generic fallback" in system
 
 

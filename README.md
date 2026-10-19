@@ -135,7 +135,7 @@ category list as a cached system prompt. The model must pick at most 8 categorie
 protocol text supporting each one; answers whose quote is not in the protocol are not published. Answers are
 cached per study in `reference/llm_cache.json`, keyed by a hash of the
 model input, so reruns only send new or changed studies. Codes are category level (e.g. C34, E11); `low`
-confidence and the catch-all categories C76, C79, C80 and C96 (no specific site) are published as
+confidence and the catch-all categories C76-C80 and C96 (ill-defined, secondary or unspecified sites) are published as
 `match_type='broad'`. LLM codes never replace an exact code.
 
 ```bash
