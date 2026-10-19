@@ -9,7 +9,7 @@ import pytest
 from ct_pipeline import llm
 from ct_pipeline import reference as R
 from ct_pipeline.build import build_snapshot, recode_snapshot
-from ct_pipeline.config import CURRENT_KEY, REFERENCE_CURRENT_KEY
+from ct_pipeline.config import CURRENT_KEY, OVERVIEW_KEY, REFERENCE_CURRENT_KEY
 from ct_pipeline.transform import transform_page
 
 from .conftest import make_study, ndjson
@@ -282,6 +282,9 @@ def test_recode_applies_new_reference_without_refetch(settings, store, site_stor
     assert current["run_id"] == result["run_id"] == "20261013T000000Z-recode"
     assert current["previous_run_id"] == "R1" and current["row_counts"]["studies"] == 1
     assert [c[:3] for c in _codes(store)] == [("NCT1", "ICD10CM", "Z00.6")]
+    overview = site_store.get_json(OVERVIEW_KEY)["by_phase"]["ALL"]
+    assert overview["icd10_chapters"]["rows"] == [["Health status and services (Z00-Z99)", 1]]
+    assert [r[0][:3] for r in overview["top_icd10_categories"]["rows"]] == ["Z00"]
 
 
 def test_build_adds_llm_codes_only_for_studies_without_exact_codes(settings, store, site_store, curated):

@@ -108,3 +108,49 @@ def test_top_conditions_merges_spelling_variants(settings, store, site_store):
     status, body, _ = call(settings, store, name="top_conditions")
     assert status == 200
     assert body["rows"] == [["Diabetes Mellitus, Type 2", 4], ["COVID-19", 2], ["Type 1 Diabetes", 1]]
+
+
+def test_icd10_panel_queries():
+    import duckdb
+
+    from ct_pipeline.queries import run_query
+
+    con = duckdb.connect()
+    con.execute("CREATE TABLE studies AS FROM (VALUES ('NCT1', 'PHASE1'), ('NCT2', 'PHASE2')) t(nct_id, phase_group)")
+    assert run_query(con, "icd10_chapters")["rows"] == []  # snapshot without study_condition_codes
+    con.execute("DROP VIEW study_condition_codes")
+    con.execute("""CREATE TABLE study_condition_codes AS FROM (VALUES
+        ('NCT1', 'ICD10CM', 'C34.1', 'Malignant neoplasm of upper lobe', 2, 'C34'),
+        ('NCT2', 'ICD10CM', 'C34', 'Malignant neoplasm of bronchus and lung', 2, 'C34'),
+        ('NCT2', 'ICD10CM', 'E11', 'Type 2 diabetes mellitus', 4, 'E11'),
+        ('NCT2', 'UMLS', 'x', 'x', NULL, NULL)
+    ) t(nct_id, code_system, code, label, icd10_chapter, icd10_category)""")
+    assert run_query(con, "icd10_chapters")["rows"] == [
+        ["Neoplasms (C00-D49)", 2],
+        ["Endocrine and metabolic (E00-E89)", 1],
+    ]
+    assert run_query(con, "top_icd10_categories", {"phase": "PHASE2"})["rows"] == [
+        ["C34 Malignant neoplasm of bronchus and lung", 1],
+        ["E11 Type 2 diabetes mellitus", 1],
+    ]
+
+
+def test_top_conditions_merges_healthy_volunteer_names(settings, store, site_store):
+    names = {
+        "NCT1": ["Healthy"],
+        "NCT2": ["Healthy Volunteers"],
+        "NCT3": ["healthy adult subjects (HS)", "Healthy"],
+        "NCT4": ["Healthy Aging"],
+    }
+    studies = []
+    for nct_id, conditions in names.items():
+        s = make_study(nct_id)
+        s["protocolSection"]["conditionsModule"] = {"conditions": conditions}
+        studies.append(s)
+    store.put_bytes("raw/R1/page_0001.ndjson", ndjson(studies))
+    transform_page(settings, store, "R1", "raw/R1/page_0001.ndjson")
+    build_snapshot(settings, store, site_store, "R1", "full", "2024-01-01T00:00:00+00:00")
+    query_api._state.update(run_id=None, con=None, checked_at=0.0)
+    status, body, _ = call(settings, store, name="top_conditions")
+    assert status == 200
+    assert body["rows"] == [["Healthy volunteers", 3], ["Healthy Aging", 1]]
