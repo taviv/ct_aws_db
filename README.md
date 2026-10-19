@@ -129,10 +129,11 @@ only the derived ICD-10-CM codes (public domain) appear in `study_condition_code
 `UMLS_API_KEY` in the environment.
 
 **LLM tier (optional, Amazon Bedrock).** For studies with no exact ICD-10-CM code, `scripts/llm_code.py` sends
-the protocol (titles, conditions, interventions, summary and eligibility criteria, long text truncated) to a
-Bedrock model together with the full ICD-10-CM category list as a cached system prompt. The model must pick
-categories from that list and quote the protocol text supporting each one; answers whose quote is not in the
-protocol are not published. Answers are cached per study in `reference/llm_cache.json`, keyed by a hash of the
+the protocol (titles, conditions, interventions, the first 2,000 characters of the summary and of the detailed
+description, the first 8,000 of the eligibility criteria) to a Bedrock model together with the full ICD-10-CM
+category list as a cached system prompt. The model must pick at most 8 categories from that list and quote the
+protocol text supporting each one; answers whose quote is not in the protocol are not published. Answers are
+cached per study in `reference/llm_cache.json`, keyed by a hash of the
 model input, so reruns only send new or changed studies. Codes are category level (e.g. C34, E11); `low`
 confidence and the catch-all categories C76, C79, C80 and C96 (no specific site) are published as
 `match_type='broad'`. LLM codes never replace an exact code.
@@ -140,6 +141,7 @@ confidence and the catch-all categories C76, C79, C80 and C96 (no specific site)
 ```bash
 make llm-eval MODEL=<model or inference-profile id>                     # scorecard: ~300 studies with exact MeSH codes
 make llm-code MODEL=<model or inference-profile id> ARGS="--limit 1000" # code studies without an exact code (resumable)
+make llm-code MODEL=<model or inference-profile id> ARGS="--phase PHASE3,PHASE2/PHASE3" # only these phase groups
 make reference                                                          # publish them as via='llm'
 make llm-try MODEL=<model or inference-profile id>                      # table for 10 ambiguous Phase 3 studies
 ```
@@ -154,7 +156,8 @@ Where the specifics are: `study_text` has three free-text fields, `brief_summary
 (NCT05001516, "Advanced Solid Tumors": the Phase Ib inclusion criteria list gastric/GEJ, pancreatic, biliary,
 MSI-H colorectal, esophageal and ovarian mucinous carcinoma; the summary and description stay generic). In others
 they are in the title or summary (NCT07522073: "Solid Tumors", title says KRAS G12D pancreatic ductal
-adenocarcinoma). Eligibility text is often long (42% of LLM targets exceed the 3,000 characters sent).
+adenocarcinoma). Eligibility text is often long: 42% of all LLM targets exceed 3,000 characters, but only about 3% of the
+Phase 3 targets exceed the 8,000 sent.
 
 `ARGS="--review answers.csv"` writes every answer to a CSV; `--price-in/--price-out/--price-cache-read/
 --price-cache-write` (USD per million tokens) add a cost estimate. In CloudShell, start long runs detached:

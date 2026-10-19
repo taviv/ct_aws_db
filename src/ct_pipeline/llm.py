@@ -19,11 +19,11 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
-MAX_ELIGIBILITY_CHARS = 3000
-MAX_CODES = 5
+MAX_ELIGIBILITY_CHARS = 8000
+MAX_CODES = 8
 CONFIDENCE = ("high", "medium", "low")
 # categories that name no specific site; always low confidence, so published as broad
 CATCH_ALL = ("C76", "C79", "C80", "C96")
@@ -141,7 +141,7 @@ TEXT_FIELDS = {
     "detailed_description": ("Detailed description", MAX_SUMMARY_CHARS),
     "eligibility_criteria": ("Eligibility criteria", MAX_ELIGIBILITY_CHARS),
 }
-DEFAULT_FIELDS = ("brief_summary", "eligibility_criteria")
+DEFAULT_FIELDS = ("brief_summary", "detailed_description", "eligibility_criteria")
 
 
 def render_study(doc: dict, fields=DEFAULT_FIELDS) -> str:
