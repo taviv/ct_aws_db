@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 3000
@@ -41,10 +41,15 @@ INSTRUCTIONS = """You assign ICD-10-CM categories to clinical trial protocols.
 Code the disease or condition of the population the study enrolls. Do not code interventions, outcomes,
 adverse events, or conditions that are only exclusion criteria or comorbidities.
 Use the protocol text to resolve vague condition names: for "advanced solid tumors", code the specific cancers
-the eligibility criteria name; if any solid tumor is eligible, use C80. Use the most specific category the text
-supports, at most {max_codes} categories, the main condition first.
+the eligibility criteria name; use C80 only if any solid tumor is eligible or no primary site is named, never
+next to site categories just because a generic term like "Advanced Cancer" is listed. Use the most specific
+category the text supports, at most {max_codes} categories, the main condition first.
+Gastroesophageal (esophagogastric) junction cancer is C16 (cardia), not C15.
 For every category, quote verbatim the protocol text that supports it (copy it exactly; use "..." between
 non-adjacent fragments).
+Confidence: high = the condition is named explicitly in the text; medium = inferred from indirect wording
+(e.g. histology, biomarker or the drug's indication); low = a generic fallback such as C80 or C96 from terms like
+"advanced malignancies".
 If the study enrolls only healthy volunteers, use Z00. If no category fits, return no codes and give the reason.
 Choose only categories from this catalog and call {tool} exactly once.
 
@@ -66,7 +71,11 @@ TOOL = {
                             "properties": {
                                 "code": {"type": "string", "description": "ICD-10-CM category from the catalog"},
                                 "evidence": {"type": "string", "description": "verbatim quote from the protocol"},
-                                "confidence": {"type": "string", "enum": list(CONFIDENCE)},
+                                "confidence": {
+                                    "type": "string",
+                                    "enum": list(CONFIDENCE),
+                                    "description": "high: named explicitly; medium: inferred; low: generic fallback",
+                                },
                             },
                             "required": ["code", "evidence", "confidence"],
                         },
@@ -157,7 +166,7 @@ def _norm(text: str) -> str:
 
 def evidence_found(evidence: str, text: str) -> bool:
     haystack = _norm(text)
-    fragments = [_norm(f).strip(" \"'“”") for f in re.split(r"\.\.\.|…", evidence or "")]
+    fragments = [_norm(f).strip(" \"'“”") for f in re.split(r"\.\.\.|…|;", evidence or "")]
     fragments = [f for f in fragments if f]
     return bool(fragments) and all(f in haystack for f in fragments)
 

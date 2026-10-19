@@ -182,3 +182,15 @@ def test_render_study_sends_only_the_chosen_text_fields():
     text = llm.render_study(doc, ("detailed_description",))
     assert "Detailed description:\nPart B enrolls gastric cancer." in text
     assert "Summary:" not in text and "Eligibility" not in text
+
+
+def test_evidence_fragments_may_be_joined_with_semicolons():
+    text = "Conditions: Adenocarcinoma; Chemoradiation; Stomach Neoplasm"
+    assert llm.evidence_found("Adenocarcinoma; Stomach Neoplasm", text)
+    assert not llm.evidence_found("Adenocarcinoma; Lung Neoplasm", text)
+
+
+def test_prompt_rules(catalog):
+    system = llm.BedrockCoder("m", catalog[0], client=FakeBedrock(LUNG)).system
+    assert "junction cancer is C16" in system and "never\nnext to site categories" in system
+    assert "low = a generic fallback" in system
