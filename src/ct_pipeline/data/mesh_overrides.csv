@@ -4,8 +4,6 @@
 mesh_id,mesh_term,icd10cm,match_type
 D001943,Breast Neoplasms,C50,broad
 D015179,Colorectal Neoplasms,C18,broad
-D015179,Colorectal Neoplasms,C19,broad
-D015179,Colorectal Neoplasms,C20,broad
 D009362,Neoplasm Metastasis,C79.9,broad
 D008545,Melanoma,C43,broad
 D010190,Pancreatic Neoplasms,C25,broad
