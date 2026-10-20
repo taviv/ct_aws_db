@@ -207,3 +207,18 @@ def test_evidence_survives_list_numbers_and_spacing():
     assert llm.evidence_found("HER2 negative advanced cancer of the biliary tract - Gallbladder cancer", text)
     assert llm.evidence_found("HER2negativeadvanced", text)
     assert not llm.evidence_found("HER2 negative advanced cancer of the lung", text)
+
+
+def test_llm_state_machine_loops_until_no_progress_then_publishes():
+    import json
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    text = (root / "statemachine" / "llm.asl.json").read_text()
+    states = json.loads(text)["States"]
+    targets = {s.get("Next") for s in states.values()} | {c["Next"] for c in states["MoreToCode"]["Choices"]}
+    assert targets - {None} <= set(states) and states["MoreToCode"]["Default"] == "Publish"
+    assert states["MoreToCode"]["Choices"][0]["Next"] == "CodePass"
+    template = (root / "template.yaml").read_text()
+    assert all(f"{name}: !GetAtt" in template for name in re.findall(r"\$\{(\w+)\}", text))

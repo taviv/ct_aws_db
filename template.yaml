@@ -220,6 +220,23 @@ Resources:
           Properties:
             Schedule: !Ref ReferenceSchedule
 
+  LlmFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ct_pipeline.handlers.llm_handler
+      Description: One time-boxed LLM condition-coding pass (Bedrock) over the current snapshot; run by LlmStateMachine
+      Timeout: 900
+      MemorySize: !Ref BuildMemorySize
+      EphemeralStorage: { Size: 10240 }
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref DataBucket }
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+
   QueryFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -270,6 +287,17 @@ Resources:
           Properties:
             Schedule: !Ref Schedule
             Input: '{"mode": "incremental"}'
+
+  LlmStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/llm.asl.json
+      DefinitionSubstitutions:
+        LlmFunctionArn: !GetAtt LlmFunction.Arn
+        ReferenceFunctionArn: !GetAtt ReferenceFunction.Arn
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref LlmFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref ReferenceFunction }
 
   # ---------------------------------------------------------------- CDN
   SiteOAC:
@@ -357,6 +385,8 @@ Outputs:
     Value: !Ref PipelineStateMachine
   ReferenceFunctionName:
     Value: !Ref ReferenceFunction
+  LlmStateMachineArn:
+    Value: !Ref LlmStateMachine
   AthenaWorkGroup:
     Value: !Ref AthenaWorkGroup
   GlueDatabase:

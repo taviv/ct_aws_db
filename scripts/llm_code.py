@@ -13,27 +13,30 @@ LLM tier for condition coding (ROADMAP.md phase 1, steps 4-5), run from AWS Clou
       Small manual test: codes a few ambiguous studies (no exact code, vague condition name like "Solid Tumors") from
       only the chosen text fields and prints a table; --ids NCT1,NCT2 picks the studies. Writes no cache.
 
+  make llm-code-cloud MODEL=<id> [ARGS="--phase PHASE3,PHASE2/PHASE3"]
+      Same as llm-code, but runs inside AWS (LLM state machine: 12-minute Lambda passes until every study is
+      answered, then the Reference function publishes the codes), so CloudShell can be closed.
+  make llm-status
+      Progress of the latest llm-code-cloud run: passes, studies still to code, tokens and estimated cost.
+
 MODEL is a Bedrock model or inference-profile id. --review FILE also writes every answer to a CSV for spot checks.
 --price-* (USD per million tokens) turn the token counts into a cost estimate.
 """
 
 import argparse
 import csv
+import json
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ct_pipeline import llm  # noqa: E402
-from ct_pipeline.build import attach_snapshot  # noqa: E402
-from ct_pipeline.config import CURRENT_KEY  # noqa: E402
-from ct_pipeline.db import connect  # noqa: E402
-from ct_pipeline.reference import download_reference  # noqa: E402
+from ct_pipeline import llm, llm_run  # noqa: E402
 from ct_pipeline.storage import LocalStore, S3Store  # noqa: E402
 
 EVAL_CACHE_KEY = "reference/llm_eval_cache.json"
-TABLES = ("studies", "study_text", "study_conditions", "study_interventions", "study_condition_codes")
 GOLD_SQL = """
     SELECT nct_id, list_sort(list(DISTINCT icd10_category)) AS gold FROM study_condition_codes
     WHERE code_system = 'ICD10CM' AND via = 'mesh' AND match_type = 'exact'
@@ -51,8 +54,6 @@ AMBIGUOUS_SQL = f"""
                   WHERE c.nct_id = s.nct_id AND regexp_matches(lower(trim(c.condition_name)), ?))
     ORDER BY hash(s.nct_id || ?) LIMIT ?
 """
-CODE_SQL = f"SELECT nct_id FROM ({llm.TARGETS_SQL}) WHERE TRUE {{phase}} ORDER BY nct_id"
-PHASE_FILTER = "AND nct_id IN (SELECT nct_id FROM studies WHERE list_contains(?::VARCHAR[], phase_group))"
 CURRENT_CODES_SQL = """
     SELECT nct_id, array_to_string(list_sort(list(DISTINCT code || ' (' || match_type || ')')), ', ')
     FROM study_condition_codes WHERE code_system = 'ICD10CM' AND nct_id IN (SELECT unnest(?::VARCHAR[]))
@@ -64,24 +65,83 @@ def make_coder(model: str, catalog: str):
     return llm.BedrockCoder(model, catalog)
 
 
+def stack_outputs(stack: str) -> dict:
+    import boto3
+
+    desc = boto3.client("cloudformation").describe_stacks(StackName=stack)["Stacks"][0]
+    return {o["OutputKey"]: o["OutputValue"] for o in desc.get("Outputs", [])}
+
+
+def sfn_client():
+    import boto3
+
+    return boto3.client("stepfunctions")
+
+
 def open_data(args):
     if args.data:
         return LocalStore(args.data)
-    import boto3
-
-    stack = boto3.client("cloudformation").describe_stacks(StackName=args.stack)["Stacks"][0]
-    outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-    return S3Store(outputs["DataBucketName"])
+    return S3Store(stack_outputs(args.stack)["DataBucketName"])
 
 
-def usage_line(usage: dict, args) -> str:
-    keys = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
-    prices = (args.price_in, args.price_out, args.price_cache_read, args.price_cache_write)
-    line = ", ".join(f"{k} {usage.get(k, 0):,}" for k in keys)
-    if any(prices):
-        cost = sum(usage.get(k, 0) * p for k, p in zip(keys, prices, strict=True)) / 1e6
+def prices(args) -> list:
+    return [args.price_in, args.price_out, args.price_cache_read, args.price_cache_write]
+
+
+def usage_line(usage: dict, price_list) -> str:
+    line = ", ".join(f"{k} {usage.get(k, 0):,}" for k in llm_run.USAGE_KEYS)
+    cost = llm_run.estimated_cost(usage, price_list)
+    if cost is not None:
         line += f"; estimated cost ${cost:,.2f}"
     return line
+
+
+def start_cloud(args, sfn, arn: str) -> None:
+    payload = {
+        "model": args.model,
+        "phases": [p.strip().upper() for p in (args.phase or "").split(",") if p.strip()],
+        "limit": args.limit or 0,
+        "workers": args.workers,
+        "prices": prices(args),
+        "publish": not args.no_publish,
+    }
+    name = "llm-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    sfn.start_execution(stateMachineArn=arn, name=name, input=json.dumps(payload))
+    print(f"Started {name}. CloudShell can be closed; check progress with `make llm-status`.")
+
+
+def print_status(sfn, arn: str) -> None:
+    runs = sfn.list_executions(stateMachineArn=arn, maxResults=1)["executions"]
+    if not runs:
+        print("No llm-code-cloud runs yet")
+        return
+    ex = sfn.describe_execution(executionArn=runs[0]["executionArn"])
+    payload = json.loads(ex.get("input") or "{}")
+    passes = []
+    for page in sfn.get_paginator("get_execution_history").paginate(executionArn=runs[0]["executionArn"]):
+        for e in page["events"]:
+            if e["type"] == "TaskSucceeded":
+                result = json.loads(e["taskSucceededEventDetails"].get("output") or "{}").get("Payload")
+                if isinstance(result, dict) and "remaining" in result:
+                    passes.append(result)
+    print(f"{ex['name']}: {ex['status']} (started {ex['startDate']:%Y-%m-%d %H:%M} UTC, model {payload.get('model')})")
+    if passes:
+        last, usage = passes[-1], {}
+        for r in passes:
+            for k, v in (r.get("usage") or {}).items():
+                usage[k] = usage.get(k, 0) + v
+        print(
+            f"  {len(passes)} passes done: {sum(r['coded'] for r in passes):,} new answers; "
+            f"{last['remaining']:,} of {last['studies']:,} studies still to code"
+            + (f"; {last['failed']:,} failed calls in the last pass" if last["failed"] else "")
+        )
+        print(f"  Tokens: {usage_line(usage, payload.get('prices'))}")
+    elif ex["status"] == "RUNNING":
+        print("  First pass still running (each pass codes for about 12 minutes)")
+    if ex["status"] == "FAILED":
+        print(f"  Error: {ex.get('error')}: {(ex.get('cause') or '')[:500]}")
+    if ex["status"] == "SUCCEEDED" and payload.get("publish", True):
+        print("  Codes published (the Reference function ran); the dashboard shows them within 15 minutes.")
 
 
 def verified(entry: dict) -> list:
@@ -111,10 +171,6 @@ def write_review(path, docs, entries, gold=None) -> None:
                 ]
             )
     print(f"\nWrote {path}")
-
-
-def phase_filter(phases: list) -> tuple:
-    return (PHASE_FILTER, [phases]) if phases else ("", [])
 
 
 def try_studies(con, coder, categories, args, phases) -> dict:
@@ -223,8 +279,8 @@ def scorecard(docs, entries, gold: dict, chapters: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("eval", "code", "try"))
-    ap.add_argument("--model", required=True, help="Bedrock model or inference-profile id")
+    ap.add_argument("mode", choices=("eval", "code", "try", "cloud", "status"))
+    ap.add_argument("--model", help="Bedrock model or inference-profile id")
     ap.add_argument("--stack", default="ct-pipeline")
     ap.add_argument("--data", help="local data directory instead of the stack's data bucket")
     ap.add_argument("--sample", type=int, default=300, help="eval: number of studies")
@@ -244,44 +300,38 @@ def main() -> None:
     ap.add_argument("--review", help="write answers to this CSV")
     for name in ("in", "out", "cache-read", "cache-write"):
         ap.add_argument(f"--price-{name}", type=float, default=0.0)
+    ap.add_argument("--no-publish", action="store_true", help="cloud: don't run the Reference function at the end")
     args = ap.parse_args()
+    if args.mode == "status":
+        print_status(sfn_client(), stack_outputs(args.stack)["LlmStateMachineArn"])
+        return
     if not args.model:
         sys.exit("Set MODEL to a Bedrock model or inference-profile id (see README: LLM tier)")
     unknown = {f.strip() for f in args.fields.split(",") if f.strip()} - set(llm.TEXT_FIELDS)
     if unknown:
         sys.exit(f"Unknown --fields {', '.join(sorted(unknown))}; choose from {', '.join(llm.TEXT_FIELDS)}")
+    if args.mode == "cloud":
+        start_cloud(args, sfn_client(), stack_outputs(args.stack)["LlmStateMachineArn"])
+        return
 
     store = open_data(args)
-    current = store.get_json(CURRENT_KEY)
-    if current is None:
-        sys.exit("No published snapshot yet (curated/CURRENT.json)")
-    if "study_condition_codes" not in current["tables"]:
-        sys.exit("The snapshot has no study_condition_codes yet: run `make reference` first")
     with tempfile.TemporaryDirectory(prefix="ct-llm-") as tmp:
         work = Path(tmp)
-        for table in TABLES:
-            store.download(current["tables"][table], work / "snapshot" / table / "data.parquet")
-        if download_reference(store, work / "reference") is None:
-            sys.exit("No reference yet: run `make reference` first")
-        con = connect(work)
-        attach_snapshot(con, work / "snapshot", list(TABLES))
-        icd = work / "reference" / "icd10cm_codes" / "data.parquet"
+        try:
+            current, con, icd = llm_run.open_snapshot(store, work)
+            phases = llm_run.parse_phases(con, args.phase)
+        except llm.LlmError as e:
+            sys.exit(str(e))
         catalog, categories = llm.category_catalog(con, icd)
         coder = make_coder(args.model, catalog)
-        phases = [p.strip().upper() for p in (args.phase or "").split(",") if p.strip()]
-        known = {r[0] for r in con.execute("SELECT DISTINCT phase_group FROM studies").fetchall()}
-        if set(phases) - known:
-            sys.exit(
-                f"Unknown --phase {', '.join(sorted(set(phases) - known))}; choose from {', '.join(sorted(known))}"
-            )
-        where, params = phase_filter(phases)
+        where, params = llm_run.phase_filter(phases)
         in_phases = f" in {', '.join(phases)}" if phases else ""
         progress = lambda d, n: print(f"  {d:,}/{n:,}", flush=True)  # noqa: E731
 
         if args.mode == "try":
             print(f"Snapshot {current['run_id']}", flush=True)
             usage = try_studies(con, coder, categories, args, phases or ["PHASE3"])
-            print(f"Tokens: {usage_line(usage, args)}")
+            print(f"Tokens: {usage_line(usage, prices(args))}")
             return
         if args.mode == "eval":
             gold = dict(con.execute(GOLD_SQL.format(phase=where), params + [args.seed, args.sample]).fetchall())
@@ -295,7 +345,7 @@ def main() -> None:
             )
             scorecard(docs, entries, gold, chapters)
         else:
-            ids = [r[0] for r in con.execute(CODE_SQL.format(phase=where), params).fetchall()]
+            ids = llm_run.code_targets(con, phases)
             print(
                 f"Snapshot {current['run_id']}: {len(ids):,} studies{in_phases} have no exact ICD-10-CM code",
                 flush=True,
@@ -318,7 +368,7 @@ def main() -> None:
             f"\nCalls: {info['coded']:,} new, {info['cached']:,} cached, {info['failed']:,} failed",
             info["errors"] or "",
         )
-        print(f"Tokens: {usage_line(info['usage'], args)}")
+        print(f"Tokens: {usage_line(info['usage'], prices(args))}")
         if args.review:
             write_review(args.review, docs, entries, gold)
 

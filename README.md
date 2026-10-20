@@ -187,8 +187,25 @@ adenocarcinoma). Eligibility text is often long: 42% of all LLM targets exceed 3
 Phase 3 targets exceed the 8,000 sent.
 
 `ARGS="--review answers.csv"` writes every answer to a CSV; `--price-in/--price-out/--price-cache-read/
---price-cache-write` (USD per million tokens) add a cost estimate. In CloudShell, start long runs detached:
-`setsid nohup make llm-code MODEL=... > llm.log 2>&1 < /dev/null &`, then `tail -3 llm.log`.
+--price-cache-write` (USD per million tokens) add a cost estimate.
+
+**Long runs without CloudShell (`make llm-code-cloud`).** CloudShell stops background jobs when the session goes
+idle, so long runs go to the `LlmStateMachine` Step Functions loop instead. Each `LlmFunction` pass downloads the
+current snapshot, codes the same targets as `make llm-code` until 3 minutes before its 15-minute Lambda timeout,
+saving `reference/llm_cache.json` every 50 studies. The loop starts another pass while the last one stopped early and
+still coded something, then invokes `ReferenceFunction` (as `make reference`) to publish the codes, so the dashboard
+updates by itself. Studies already in the cache are not sent again, so a stopped run resumes where it left off.
+Bedrock costs the same as `make llm-code`; Lambda and Step Functions add cents.
+
+```bash
+make deploy        # once, creates LlmFunction + LlmStateMachine
+make llm-code-cloud MODEL=<model or inference-profile id> ARGS="--phase PHASE3,PHASE2/PHASE3 --price-in 1 --price-out 5 --price-cache-read 0.1 --price-cache-write 1.25"
+make llm-status    # latest run: RUNNING/SUCCEEDED/FAILED, passes, studies still to code, tokens, estimated cost
+```
+
+`ARGS` takes `--phase`, `--limit`, `--workers`, the prices, and `--no-publish` (skip the final Reference run).
+A run ends without publishing as FAILED if a pass raises (e.g. no Bedrock access to the model); if a pass makes no
+progress because every call failed, the loop stops and publishes what is cached. `make llm-status` shows the error.
 
 ## Dashboards
 

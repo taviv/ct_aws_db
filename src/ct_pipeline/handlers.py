@@ -1,9 +1,11 @@
-"""Lambda entry points (one code package, five functions)."""
+"""Lambda entry points (one code package, six functions)."""
 
 import logging
+import shutil
 import time
+from pathlib import Path
 
-from . import fetch
+from . import fetch, llm, llm_run
 from .build import build_snapshot, recode_snapshot
 from .config import CURRENT_KEY, Settings
 from .query_api import lambda_handler as query_handler  # noqa: F401
@@ -13,6 +15,8 @@ from .transform import transform_page
 from .umls import UmlsClient
 
 logger = logging.getLogger(__name__)
+
+LLM_MARGIN_S = 180  # stop starting Bedrock calls this long before the Lambda timeout
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -85,3 +89,32 @@ def reference_handler(event, context):
             glue_client=boto3.client("glue") if settings.glue_database else None,
         )
     return result
+
+
+def llm_handler(event, context):
+    """
+    One time-boxed `llm-code` pass over the current snapshot; the LLM state machine repeats it while it makes progress
+    and is not `complete`. Event: {"model", "phases": [...], "limit", "workers", "prices": [in, out, cache read,
+    cache write per million tokens]}. Answers go to reference/llm_cache.json, saved every 50 studies.
+    """
+    settings = Settings.from_env()
+    store = open_store(settings.data_uri)
+    work = Path(settings.work_dir) / "llm"
+    shutil.rmtree(work, ignore_errors=True)
+    deadline = time.monotonic() + context.get_remaining_time_in_millis() / 1000 - LLM_MARGIN_S if context else None
+    try:
+        _, con, icd = llm_run.open_snapshot(store, work)
+        phases = llm_run.parse_phases(con, event.get("phases"))
+        ids = llm_run.code_targets(con, phases)[: event.get("limit") or None]
+        docs = llm.study_documents(con, ids)
+        catalog, categories = llm.category_catalog(con, icd)
+        con.close()
+        coder = llm.BedrockCoder(event["model"], catalog)
+        workers = int(event.get("workers") or llm.WORKERS)
+        _, info = llm.code_studies(coder, store, docs, categories, deadline=deadline, workers=workers)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    info["remaining"] = info["studies"] - info["cached"] - info["coded"]
+    info["estimated_cost_usd"] = llm_run.estimated_cost(info["usage"], event.get("prices"))
+    logger.info("LLM pass: %s", info)
+    return info
