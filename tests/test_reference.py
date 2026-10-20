@@ -194,6 +194,16 @@ def test_shipped_curated_files_parse():
     assert not re.fullmatch(healthy, R.normalize_condition("Healthy Aging"))
 
 
+def test_shipped_overrides_fix_wrong_crosswalk_rows():
+    codes = {}
+    for r in R.load_curated()[0]:
+        codes.setdefault(r["label"], set()).add(r["code"])
+    assert codes["Hypertension"] == {"I10"}
+    assert codes["Leukemia, Myelogenous, Chronic, BCR-ABL Positive"] == {"C92.1"}
+    assert codes["Coronary Artery Disease"] == {"I25.10"}
+    assert codes["Laryngeal Diseases"] == {"J38.7"}
+
+
 def _study(nct_id, conditions, meshes=(), ancestors=()):
     s = make_study(nct_id)
     s["protocolSection"]["conditionsModule"] = {"conditions": list(conditions)}

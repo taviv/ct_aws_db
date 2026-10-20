@@ -1,5 +1,6 @@
 # Curated condition MeSH → ICD-10-CM where MONDO/Wikidata have no mapping. Always preferred over crosswalks.
 # Picked from the most frequent unmapped condition MeSH terms in Phase 1 studies; review clinically before relying on them.
+# Also overrides wrong crosswalk rows (e.g. MONDO Hypertension → I15 secondary hypertension, Wikidata CML → C91.1 CLL).
 # match_type: exact = same concept; broad = the code is broader than (or a typical reading of) the MeSH concept.
 mesh_id,mesh_term,icd10cm,match_type
 D001943,Breast Neoplasms,C50,broad
@@ -96,3 +97,9 @@ D009477,"Hereditary Sensory and Autonomic Neuropathies",G60.8,broad
 D000257,Adenoviridae Infections,B34.0,exact
 D000092122,Bronchiolitis Obliterans Syndrome,J44.81,exact
 D003863,Depression,F32.A,exact
+D006973,Hypertension,I10,exact
+D015464,"Leukemia, Myelogenous, Chronic, BCR-ABL Positive",C92.1,exact
+D007674,Kidney Diseases,N28.9,broad
+D005921,Glomerulonephritis,N05.9,exact
+D007818,Laryngeal Diseases,J38.7,broad
+D003324,Coronary Artery Disease,I25.10,exact
