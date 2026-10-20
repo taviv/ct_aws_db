@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Coding · ClinicalTrials Clinical Trials Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3e;
+      --text:     #e2e8f0;
+      --muted:    #8892a4;
+      --accent:   #6366f1;
+      --green:    #22c55e;
+      --yellow:   #eab308;
+      --red:      #ef4444;
+      --blue:     #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    #refresh-btn {
+      background: var(--accent); color: #fff; border: none;
+      padding: 8px 18px; border-radius: 6px; cursor: pointer;
+      font-size: 0.85rem; font-weight: 600; transition: opacity .2s;
+    }
+    #refresh-btn:hover { opacity: .85; }
+    #refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Nav ── */
+    nav {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex; gap: 4px;
+    }
+    nav a {
+      display: inline-block; padding: 10px 16px;
+      font-size: 0.82rem; font-weight: 600; text-decoration: none;
+      color: var(--muted); border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Layout ── */
+    main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ── Summary cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 16px; margin-bottom: 28px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px 18px;
+    }
+    .card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+                   letter-spacing: .06em; margin-bottom: 8px; }
+    .card .value { font-size: 1.9rem; font-weight: 700; line-height: 1; }
+    .card .sub   { font-size: 0.75rem; color: var(--muted); margin-top: 5px; }
+    .card.green .value { color: var(--green); }
+    .card.blue  .value { color: var(--blue);  }
+    .card.yellow .value { color: var(--yellow); }
+    .card.red   .value { color: var(--red);   }
+    .card.accent .value { color: var(--accent); }
+
+    /* ── Chart grid ── */
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 20px; margin-bottom: 28px;
+    }
+    .chart-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px;
+    }
+    .chart-box h2 {
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    .chart-box canvas { width: 100% !important; }
+
+    /* ── Table ── */
+    .table-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px; overflow-x: auto;
+    }
+    .table-box h2 {
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    th {
+      text-align: left; padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 600;
+      text-transform: uppercase; font-size: 0.72rem; letter-spacing: .05em;
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(99,102,241,.06); }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 0.7rem; font-weight: 600; white-space: nowrap;
+    }
+    .badge.COMPLETED            { background:#16533a; color:#4ade80; }
+    .badge.RECRUITING           { background:#1e3a5f; color:#60a5fa; }
+    .badge.ACTIVE_NOT_RECRUITING{ background:#3b2f00; color:#fbbf24; }
+    .badge.TERMINATED           { background:#4c1d1d; color:#f87171; }
+    .badge.NOT_YET_RECRUITING   { background:#1f2d3d; color:#93c5fd; }
+    .badge.WITHDRAWN            { background:#2d2d2d; color:#9ca3af; }
+    .badge.UNKNOWN_STATUS       { background:#2d2d2d; color:#9ca3af; }
+
+    /* ── Loading / error ── */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin .6s linear infinite; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { color: var(--red); font-size: 0.82rem; padding: 8px 0; }
+    /* ── LLM coding tab ── */
+    .intro { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; max-width: 900px; line-height: 1.5; }
+    .split { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin: 6px 0 10px; }
+    .split div { height: 100%; }
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.8rem; color: var(--muted); }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+    .quality ul { margin: 6px 0 14px 18px; font-size: 0.83rem; line-height: 1.6; }
+    .quality p { font-size: 0.83rem; color: var(--muted); line-height: 1.5; }
+    .quality b { color: var(--text); }
+    td.evidence { color: var(--muted); font-style: italic; max-width: 520px; }
+    td.codes { white-space: nowrap; }
+    td.empty { color: var(--muted); text-align: center; padding: 24px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚗️ ClinicalTrials.gov — Clinical Trials Dashboard</h1>
+    <p id="last-updated">Loading…</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <select id="phase-select" onchange="loadAll()" aria-label="Phase"
+            style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+      <option value="ALL">All phases</option>
+    </select>
+    <button id="refresh-btn" onclick="OVERVIEW = null; loadAll()">↻ Refresh</button>
+  </div>
+</header>
+
+<nav>
+  <a href="dashboard.html">Overview</a>
+  <a href="dashboard_duration.html">Study Duration</a>
+  <a href="dashboard_llm.html" class="active">LLM Coding</a>
+</nav>
+
+<main>
+  <p class="intro">
+    Studies whose conditions get no exact ICD-10-CM code from the MeSH and text mappings are sent, with their
+    protocol text (summary, detailed description, eligibility criteria), to an LLM that picks ICD-10-CM categories.
+    A code is published only if the LLM's quote is found in the protocol. So far this has run for
+    <b>Phase 3 and Phase 2/3</b> studies.
+  </p>
+
+  <!-- 1. Headline -->
+  <div class="cards">
+    <div class="card"><div class="label">Exact code before LLM</div><div class="value" id="c-before">—</div><div class="sub" id="c-before-sub"></div></div>
+    <div class="card green"><div class="label">Exact code with LLM</div><div class="value" id="c-after">—</div><div class="sub" id="c-after-sub"></div></div>
+    <div class="card accent"><div class="label">Studies gained</div><div class="value" id="c-gain">—</div><div class="sub" id="c-gain-sub"></div></div>
+    <div class="card blue"><div class="label">Broad → exact</div><div class="value" id="c-broad">—</div><div class="sub">had only a broad code</div></div>
+    <div class="card yellow"><div class="label">No code → exact</div><div class="value" id="c-none">—</div><div class="sub">no code, or only a MeSH-ancestor fallback</div></div>
+  </div>
+  <div class="chart-box" style="margin-bottom:28px">
+    <h2>All studies in this phase</h2>
+    <div class="split" id="split"></div>
+    <div class="legend" id="split-legend"></div>
+  </div>
+
+  <div class="chart-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:28px">
+    <!-- 2. Chart -->
+    <div class="chart-box"><h2>Top 15 ICD-10-CM categories added by the LLM</h2><canvas id="chart-llm-categories" height="380"></canvas></div>
+    <!-- 4. Quality -->
+    <div class="chart-box quality">
+      <h2>How good are the codes?</h2>
+      <p>Scorecard on <b>300 Phase 3 and Phase 2/3 studies</b> that already had exact MeSH-derived codes, run
+         blind (the LLM didn't see those codes):</p>
+      <ul>
+        <li><b>83%</b> of studies: at least one LLM category agrees with the MeSH code</li>
+        <li><b>72%</b> of the MeSH categories were found by the LLM (recall)</li>
+        <li><b>68%</b> of the LLM's verified categories match a MeSH code (precision); <b>69%</b> of those it would publish as exact</li>
+        <li><b>26 of 414</b> codes were dropped because their quote wasn't found in the protocol</li>
+      </ul>
+      <p><b>The MeSH codes aren't a true gold standard.</b> Of the 51 studies with no agreement, a manual
+         review found the LLM right and the MeSH code wrong in about 12, the LLM right but its quote rejected in
+         about 9, both defensible in about 11, and the LLM wrong in about 19 (6% of the 300).</p>
+      <p style="margin-top:10px"><b>Method:</b> Claude Haiku 4.5 on Amazon Bedrock, prompt v5, up to 12 categories
+         per study. Every code needs a quote found in the protocol text. Catch-all categories (C76–C80, C96) are
+         published as broad only, and LLM codes are never added to a study that already has an exact code.</p>
+    </div>
+  </div>
+
+  <!-- 3. Examples -->
+  <div class="table-box">
+    <h2>Examples: studies coded exactly by the LLM</h2>
+    <table>
+      <thead><tr><th>Study</th><th>Conditions as written</th><th>Before (broad only)</th><th>LLM code</th><th>Protocol evidence</th></tr></thead>
+      <tbody id="tbody-examples"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+// Precomputed by the pipeline (one block per phase group), see dashboard.html.
+const OVERVIEW_URL = "data/overview.json";
+const charts = {};
+let OVERVIEW = null;
+let firstLoad = true;
+
+async function loadOverview() {
+  if (OVERVIEW) return OVERVIEW;
+  const res = await fetch(OVERVIEW_URL, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} loading ${OVERVIEW_URL}`);
+  OVERVIEW = await res.json();
+  const sel = document.getElementById("phase-select");
+  const current = firstLoad ? "PHASE3" : sel.value;  // the LLM tier has run for Phase 3 first
+  firstLoad = false;
+  sel.length = 1;
+  OVERVIEW.phases.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.value;
+    opt.textContent = `${p.label} (${Number(p.studies).toLocaleString()})`;
+    sel.appendChild(opt);
+  });
+  sel.value = OVERVIEW.by_phase[current] ? current : "ALL";
+  return OVERVIEW;
+}
+
+async function query(name) {
+  const data = await loadOverview();
+  const phase = document.getElementById("phase-select").value || "ALL";
+  const block = data.by_phase[phase] || data.by_phase.ALL;
+  if (!(name in block)) throw new Error(`Query ${name} missing from ${OVERVIEW_URL}; rerun the pipeline`);
+  return block[name];
+}
+
+function fmt(n) { return n == null ? "—" : Number(n).toLocaleString(); }
+function pct(n, total) { return total ? `${(100 * n / total).toFixed(1)}%` : "—"; }
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+async function loadCoverage() {
+  const d = await query("llm_coverage");
+  const total = d.total_studies || 0, before = d.exact_before || 0, after = d.exact_after || 0;
+  document.getElementById("c-before").textContent = pct(before, total);
+  document.getElementById("c-before-sub").textContent = `${fmt(before)} of ${fmt(total)} studies`;
+  document.getElementById("c-after").textContent = pct(after, total);
+  document.getElementById("c-after-sub").textContent = `${fmt(after)} of ${fmt(total)} studies`;
+  document.getElementById("c-gain").textContent = `+${fmt(after - before)}`;
+  document.getElementById("c-gain-sub").textContent = `+${total ? (100 * (after - before) / total).toFixed(1) : 0} points`;
+  document.getElementById("c-broad").textContent = fmt(d.broad_to_exact);
+  document.getElementById("c-none").textContent = fmt(d.uncoded_to_exact);
+  const parts = [
+    ["Exact before LLM", before, "#22c55e"],
+    ["Broad → exact (LLM)", d.broad_to_exact || 0, "#3b82f6"],
+    ["No code → exact (LLM)", d.uncoded_to_exact || 0, "#eab308"],
+    ["LLM: broad only", d.llm_broad_only || 0, "#a855f7"],
+    ["Still not exact", Math.max(total - after - (d.llm_broad_only || 0), 0), "#2a2d3e"],
+  ];
+  document.getElementById("split").innerHTML = parts.map(([l, n, c]) =>
+    `<div title="${l}: ${fmt(n)}" style="width:${total ? 100 * n / total : 0}%;background:${c}"></div>`).join("");
+  document.getElementById("split-legend").innerHTML = parts.map(([l, n, c]) =>
+    `<span><i style="background:${c}"></i>${l}: <b>${fmt(n)}</b> (${pct(n, total)})</span>`).join("");
+}
+
+function hBar(canvasId, data, color) {
+  if (charts[canvasId]) charts[canvasId].destroy();
+  charts[canvasId] = new Chart(document.getElementById("chart-" + canvasId), {
+    type: "bar",
+    data: {
+      labels: data.rows.map(r => r[0]),
+      datasets: [{ data: data.rows.map(r => r[1]), backgroundColor: color, borderRadius: 4, borderSkipped: false }],
+    },
+    options: {
+      indexAxis: "y",
+      scales: {
+        x: { ticks: { color: "#8892a4" }, grid: { color: "#2a2d3e" } },
+        y: { ticks: { color: "#e2e8f0", font: { size: 11 } }, grid: { display: false } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+async function loadExamples() {
+  const d = await query("llm_examples");
+  const tbody = document.getElementById("tbody-examples");
+  if (!d.rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">No LLM codes for this phase yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.rows.map(([nct, conditions, before, llmCodes, evidence]) => `<tr>
+      <td><a href="https://clinicaltrials.gov/study/${esc(nct)}" target="_blank" rel="noopener"
+             style="color:#6366f1;text-decoration:none">${esc(nct)}</a></td>
+      <td>${esc(conditions || "—")}</td>
+      <td class="codes">${esc(before || "none")}</td>
+      <td>${esc(llmCodes).replace(/; /g, "<br>")}</td>
+      <td class="evidence">“${esc(evidence)}”</td>
+    </tr>`).join("");
+}
+
+async function loadAll() {
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Loading…';
+  document.getElementById("last-updated").textContent = "Loading…";
+  try {
+    await Promise.all([
+      loadCoverage(),
+      query("llm_top_categories").then(d => hBar("llm-categories", d, "#a855f7")),
+      loadExamples(),
+    ]);
+    const generated = OVERVIEW && OVERVIEW.generated_at ? new Date(OVERVIEW.generated_at).toLocaleString() : "unknown";
+    document.getElementById("last-updated").textContent =
+      `Data refreshed: ${generated} · loaded ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById("last-updated").textContent = `Error: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "↻ Refresh";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadAll);
+</script>
+</body>
+</html>

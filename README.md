@@ -2,7 +2,7 @@
 
 Weekly pipeline that pulls clinical trials from the
 [ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api), stores them as Parquet on
-S3, and serves two dashboards. No database, no VPC, nothing running between runs.
+S3, and serves three dashboards. No database, no VPC, nothing running between runs.
 
 Which studies are loaded is set by two stack parameters. By default that is every phased
 study (Early Phase 1 → Phase 4, ~224k). `QueryTerm=AREA[Phase]PHASE1 StartYear=2016` limits it
@@ -11,6 +11,7 @@ to Phase 1 (including Phase 1/2) studies starting in 2016 or later (~35k).
 Dashboards (paths under the `DashboardUrl` stack output):
 - `/`: overview (status, phases, sponsors, conditions, countries, enrollment), filterable by phase
 - `/dashboard_duration.html`: start → completion duration of completed studies
+- `/dashboard_llm.html`: what the LLM tier adds to ICD-10-CM coding (coverage before/after, categories, examples with protocol evidence, eval scorecard)
 
 ```
 EventBridge (weekly) ──► Step Functions
@@ -86,7 +87,7 @@ All tables are keyed by `nct_id`. One row per study in `studies` and `study_text
 | `study_locations` | facility, status, city, state, country, zip, latitude/longitude |
 | `study_sponsors` | lead sponsor and collaborators (`sponsor_type`, name, class) |
 | `condition_mesh_terms`, `intervention_mesh_terms` | MeSH terms and ancestors from `derivedSection` |
-| `study_condition_codes` | structured condition codes (ICD-10-CM, ICD-11, MONDO, UMLS CUI) per study, with `via`, `match_type`, `source`, ICD-10 chapter/block/category and `ref_version` (see below) |
+| `study_condition_codes` | structured condition codes (ICD-10-CM, ICD-11, MONDO, UMLS CUI) per study, with `via`, `match_type`, `source`, `evidence` (the verified protocol quote, for `via='llm'`), ICD-10 chapter/block/category and `ref_version` (see below) |
 
 ### Condition codes
 

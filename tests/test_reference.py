@@ -308,6 +308,9 @@ def test_build_adds_llm_codes_only_for_studies_without_exact_codes(settings, sto
     codes = {(n, c, via): m for n, s, c, via, m, _ in _codes(store) if s == "ICD10CM"}
     assert codes[("NCT4", "C34", "llm")] == "exact"
     assert ("NCT1", "C34", "mesh") in codes and ("NCT1", "C34", "llm") not in codes
+    path = store.root / store.get_json(CURRENT_KEY)["tables"]["study_condition_codes"]
+    evidence = dict(duckdb.sql(f"SELECT via, evidence FROM read_parquet('{path}') WHERE nct_id = 'NCT4'").fetchall())
+    assert evidence == {"llm": "lung"}
 
 
 def test_llm_code_script_eval_and_code(settings, store, site_store, curated, monkeypatch, capsys, tmp_path):
