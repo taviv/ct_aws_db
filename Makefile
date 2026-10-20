@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try condition-stats verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-status condition-stats verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -63,11 +63,17 @@ condition-stats:
 	.verify-venv/bin/python scripts/condition_stats.py --stack $(STACK)
 
 ## LLM tier for condition coding: MODEL=<Bedrock model or inference-profile id> (README: "LLM tier")
-llm-eval llm-code llm-try:
+llm-eval llm-code llm-try llm-code-cloud:
 	@test -n "$(MODEL)" || (echo "Set MODEL=<Bedrock model or inference-profile id>" && exit 1)
 	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
 	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
-	.verify-venv/bin/python scripts/llm_code.py $(@:llm-%=%) --stack $(STACK) --model "$(MODEL)" $(ARGS)
+	.verify-venv/bin/python scripts/llm_code.py $(patsubst code-cloud,cloud,$(@:llm-%=%)) --stack $(STACK) --model "$(MODEL)" $(ARGS)
+
+## Progress of the latest llm-code-cloud run
+llm-status:
+	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
+	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
+	.verify-venv/bin/python scripts/llm_code.py status --stack $(STACK)
 
 ## Data integrity checks against the live stack (README: "Verifying the data")
 VERIFY_PY := $(shell command -v python$(RUNTIME) || echo $(PY))

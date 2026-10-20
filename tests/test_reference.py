@@ -410,3 +410,98 @@ def test_llm_code_script_try_mode(settings, store, site_store, curated, monkeypa
     monkeypatch.setattr(sys, "argv", base + ["--fields", "summary"])
     with pytest.raises(SystemExit, match="Unknown --fields summary"):
         mod.main()
+
+
+def _llm_script():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("llm_code", Path(__file__).parents[1] / "scripts" / "llm_code.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_llm_lambda_pass_resumes_from_cache(settings, store, site_store, curated, monkeypatch):
+    from ct_pipeline import handlers
+
+    R.build_reference(store, settings.work_dir, get=fake_get())
+    studies = [_study("NCT1", ["NSCLC"], meshes=[("D008175", "Lung Neoplasms")]), _study("NCT4", ["Something rare"])]
+    _build(settings, store, site_store, "R1", studies)
+    monkeypatch.setenv("CT_DATA_URI", settings.data_uri)
+    monkeypatch.setenv("CT_WORK_DIR", settings.work_dir)
+
+    class Client:
+        def converse(self, **kw):
+            answer = {"codes": [{"code": "C34", "evidence": "Study", "confidence": "high"}]}
+            content = [{"toolUse": {"name": llm.TOOL_NAME, "input": answer}}]
+            return {"output": {"message": {"content": content}}, "usage": {"inputTokens": 10, "outputTokens": 2}}
+
+    coder = llm.BedrockCoder
+    monkeypatch.setattr(llm, "BedrockCoder", lambda model, catalog: coder(model, catalog, client=Client()))
+    ctx = type("Ctx", (), {"get_remaining_time_in_millis": lambda self: 900_000})()
+    event = {"model": "m", "phases": ["PHASE1"], "limit": 0, "workers": 2, "prices": [1, 5, 0, 0]}
+    info = handlers.llm_handler(event, ctx)
+    assert (info["studies"], info["coded"], info["remaining"], info["complete"]) == (1, 1, 0, True)
+    assert info["estimated_cost_usd"] == pytest.approx(20 / 1e6)
+    assert set(store.get_json(llm.CACHE_KEY)["entries"]) == {"NCT4"}
+    assert handlers.llm_handler(event, ctx)["cached"] == 1
+
+    store.put_json(llm.CACHE_KEY, {"entries": {}})
+    late = type("Ctx", (), {"get_remaining_time_in_millis": lambda self: 1_000})()
+    info = handlers.llm_handler(event, late)
+    assert (info["coded"], info["remaining"], info["complete"]) == (0, 1, False)
+    with pytest.raises(llm.LlmError, match="Unknown --phase PHASE3"):
+        handlers.llm_handler(event | {"phases": ["PHASE3"]}, ctx)
+
+
+def test_llm_code_script_cloud_and_status(monkeypatch, capsys):
+    import sys
+
+    mod = _llm_script()
+
+    def event(result):
+        return {"type": "TaskSucceeded", "taskSucceededEventDetails": {"output": json.dumps({"Payload": result})}}
+
+    class Sfn:
+        started = []
+
+        def start_execution(self, **kw):
+            self.started.append(kw)
+
+        def list_executions(self, **kw):
+            return {"executions": [{"executionArn": "arn:run"}]}
+
+        def describe_execution(self, executionArn):
+            start = datetime(2026, 10, 19, 14, 0, tzinfo=timezone.utc)
+            return {"name": "llm-1", "status": "RUNNING", "startDate": start, "input": self.started[0]["input"]}
+
+        def get_paginator(self, name):
+            base = {"studies": 100, "usage": {"inputTokens": 1_000_000}}
+            passes = [
+                base | {"cached": 0, "coded": 60, "failed": 0, "remaining": 40},
+                base | {"cached": 60, "coded": 30, "failed": 1, "remaining": 10},
+            ]
+            pages = [{"events": [event(p) for p in passes] + [{"type": "TaskStarted"}]}]
+            return type("Paginator", (), {"paginate": lambda self, **kw: pages})()
+
+    monkeypatch.setattr(mod, "sfn_client", Sfn)
+    monkeypatch.setattr(mod, "stack_outputs", lambda stack: {"LlmStateMachineArn": "arn:sm"})
+    argv = ["llm_code.py", "cloud", "--model", "m", "--phase", "PHASE3, phase2/phase3", "--price-in", "1"]
+    monkeypatch.setattr(sys, "argv", argv)
+    mod.main()
+    assert Sfn.started[0]["stateMachineArn"] == "arn:sm"
+    assert json.loads(Sfn.started[0]["input"]) == {
+        "model": "m",
+        "phases": ["PHASE3", "PHASE2/PHASE3"],
+        "limit": 0,
+        "workers": llm.WORKERS,
+        "prices": [1.0, 0.0, 0.0, 0.0],
+        "publish": True,
+    }
+    monkeypatch.setattr(sys, "argv", ["llm_code.py", "status"])
+    mod.main()
+    out = capsys.readouterr().out
+    assert "llm-1: RUNNING (started 2026-10-19 14:00 UTC, model m)" in out
+    assert "2 passes done: 90 new answers; 10 of 100 studies still to code; 1 failed calls" in out
+    assert "estimated cost $2.00" in out

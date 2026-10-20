@@ -1,0 +1,64 @@
+{
+  "Comment": "LLM condition coding: repeat the time-boxed LlmFunction pass while it makes progress, then publish the codes with ReferenceFunction",
+  "StartAt": "CodePass",
+  "States": {
+    "CodePass": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${LlmFunctionArn}",
+        "Payload": {
+          "model.$": "$.model",
+          "phases.$": "$.phases",
+          "limit.$": "$.limit",
+          "workers.$": "$.workers",
+          "prices.$": "$.prices"
+        }
+      },
+      "ResultSelector": {
+        "complete.$": "$.Payload.complete",
+        "coded.$": "$.Payload.coded",
+        "remaining.$": "$.Payload.remaining"
+      },
+      "ResultPath": "$.last",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "Sandbox.Timedout"],
+          "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2
+        }
+      ],
+      "Next": "MoreToCode"
+    },
+    "MoreToCode": {
+      "Type": "Choice",
+      "Comment": "Another pass while the last one stopped at its time limit (or had failed calls) but still coded studies",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.last.complete", "BooleanEquals": false },
+            { "Variable": "$.last.coded", "NumericGreaterThan": 0 }
+          ],
+          "Next": "CodePass"
+        },
+        { "Variable": "$.publish", "BooleanEquals": false, "Next": "Done" }
+      ],
+      "Default": "Publish"
+    },
+    "Publish": {
+      "Type": "Task",
+      "Comment": "make reference: rebuild the reference (incl. condition_llm_codes) and recode the current snapshot",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${ReferenceFunctionArn}", "Payload": {} },
+      "ResultSelector": { "reference_version.$": "$.Payload.reference_version" },
+      "ResultPath": "$.published",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2
+        }
+      ],
+      "Next": "Done"
+    },
+    "Done": { "Type": "Succeed" }
+  }
+}
