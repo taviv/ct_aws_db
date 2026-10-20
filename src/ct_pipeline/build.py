@@ -75,7 +75,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
                           or, for studies with no other ICD-10-CM code, the normalized name is in
                           condition_text_map (UMLS)
       via='llm'           for studies with no exact ICD-10-CM code yet: categories an LLM selected from the
-                          protocol text with verified quoted evidence (condition_llm_codes, see llm.py)
+                          protocol text with verified quoted evidence (condition_llm_codes, see llm.py);
+                          the quote is kept in `evidence` (NULL for the other vias)
       via='mesh_ancestor' fallback for studies with no ICD-10-CM code yet: the most specific code reachable
                           from a MeSH ancestor; always match_type='broad'
     Expects study_conditions and condition_mesh_terms views (attach_snapshot).
@@ -89,21 +90,21 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
         code_map AS (SELECT * FROM {ref["condition_code_map"]}),
         direct AS (
             SELECT DISTINCT t.nct_id, m.code_system, m.code, m.label, 'mesh' AS via, t.mesh_id, t.term AS mesh_term,
-                   NULL::VARCHAR AS condition_name, m.match_type, m.source
+                   NULL::VARCHAR AS condition_name, m.match_type, m.source, NULL::VARCHAR AS evidence
             FROM condition_mesh_terms t JOIN code_map m USING (mesh_id)
             WHERE NOT t.is_ancestor
         ),
         text AS (
             SELECT DISTINCT c.nct_id, r.code_system, r.code, NULL::VARCHAR AS label, 'text' AS via,
                    NULL::VARCHAR AS mesh_id, NULL::VARCHAR AS mesh_term, c.condition_name, r.match_type,
-                   'curated' AS source
+                   'curated' AS source, NULL::VARCHAR AS evidence
             FROM study_conditions c
             JOIN {ref["condition_text_rules"]} r
               ON regexp_full_match(trim(regexp_replace(lower(c.condition_name), '[^a-z0-9]+', ' ', 'g')), r.pattern)
         ),
         text_map AS (
             SELECT DISTINCT c.nct_id, m.code_system, m.code, m.label, 'text' AS via, NULL::VARCHAR AS mesh_id,
-                   NULL::VARCHAR AS mesh_term, c.condition_name, m.match_type, m.source
+                   NULL::VARCHAR AS mesh_term, c.condition_name, m.match_type, m.source, NULL::VARCHAR AS evidence
             FROM study_conditions c
             JOIN {ref["condition_text_map"]} m
               ON m.condition_norm = trim(regexp_replace(lower(c.condition_name), '[^a-z0-9]+', ' ', 'g'))
@@ -118,7 +119,7 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
         llm AS (
             SELECT DISTINCT l.nct_id, l.code_system, l.code, NULL::VARCHAR AS label, 'llm' AS via,
                    NULL::VARCHAR AS mesh_id, NULL::VARCHAR AS mesh_term, NULL::VARCHAR AS condition_name,
-                   l.match_type, 'llm' AS source
+                   l.match_type, 'llm' AS source, l.evidence
             FROM {ref["condition_llm_codes"]} l
             WHERE l.nct_id IN (SELECT nct_id FROM study_conditions)
               AND l.nct_id NOT IN (SELECT nct_id FROM exact_coded)
@@ -132,6 +133,7 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
         ancestor AS (
             SELECT DISTINCT t.nct_id, m.code_system, m.code, m.label, 'mesh_ancestor' AS via, t.mesh_id,
                    t.term AS mesh_term, NULL::VARCHAR AS condition_name, 'broad' AS match_type, m.source,
+                   NULL::VARCHAR AS evidence,
                    CASE i.level WHEN 'code' THEN 4 WHEN 'category' THEN 3 WHEN 'block' THEN 2 ELSE 1 END AS specificity
             FROM condition_mesh_terms t
             JOIN code_map m USING (mesh_id)
@@ -148,7 +150,7 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
         )
         SELECT a.nct_id, a.code_system, a.code, coalesce(i.description, a.label) AS label,
                i.chapter AS icd10_chapter, i.block AS icd10_block, i.category AS icd10_category,
-               a.via, a.mesh_id, a.mesh_term, a.condition_name, a.match_type, a.source,
+               a.via, a.mesh_id, a.mesh_term, a.condition_name, a.match_type, a.source, a.evidence,
                {_q(ref_version)} AS ref_version
         FROM coded_all a LEFT JOIN icd i ON a.code_system = 'ICD10CM' AND i.code = a.code
         ORDER BY a.nct_id, a.code_system, a.code, a.via, a.mesh_id, a.condition_name

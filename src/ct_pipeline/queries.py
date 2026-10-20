@@ -91,6 +91,56 @@ OVERVIEW_QUERIES = {
         )
         ORDER BY 2 DESC, 1 LIMIT 15
     """,
+    # LLM coding tab. "Before" is the deterministic codes alone; LLM codes are only added for studies with no
+    # exact deterministic code, which also get no MeSH-ancestor fallback.
+    "llm_coverage": """
+        SELECT (SELECT COUNT(*) FROM s) AS total_studies,
+               COUNT(*) FILTER (WHERE exact_before) AS exact_before,
+               COUNT(*) FILTER (WHERE exact_before OR exact_llm) AS exact_after,
+               COUNT(*) FILTER (WHERE exact_llm AND coded_before) AS broad_to_exact,
+               COUNT(*) FILTER (WHERE exact_llm AND NOT coded_before) AS uncoded_to_exact,
+               COUNT(*) FILTER (WHERE any_llm AND NOT exact_llm) AS llm_broad_only
+        FROM (
+            SELECT nct_id,
+                   bool_or(via <> 'llm' AND match_type = 'exact') AS exact_before,
+                   bool_or(via NOT IN ('llm', 'mesh_ancestor')) AS coded_before,
+                   bool_or(via = 'llm' AND match_type = 'exact') AS exact_llm,
+                   bool_or(via = 'llm') AS any_llm
+            FROM study_condition_codes SEMI JOIN s USING (nct_id)
+            WHERE code_system = 'ICD10CM'
+            GROUP BY nct_id
+        )
+    """,
+    "llm_top_categories": """
+        SELECT icd10_category || ' ' || CASE WHEN length(l) > 45 THEN l[:44] || '…' ELSE l END AS label, value
+        FROM (
+            SELECT icd10_category, arg_min(label, length(code)) AS l, COUNT(DISTINCT nct_id) AS value
+            FROM study_condition_codes SEMI JOIN s USING (nct_id)
+            WHERE code_system = 'ICD10CM' AND via = 'llm' AND match_type = 'exact' AND icd10_category IS NOT NULL
+            GROUP BY icd10_category
+        )
+        ORDER BY 2 DESC, 1 LIMIT 15
+    """,
+    # At most one example per first LLM category, so the table isn't all one disease.
+    "llm_examples": """
+        SELECT l.nct_id,
+               (SELECT string_agg(condition_name, '; ' ORDER BY condition_name)
+                FROM study_conditions c WHERE c.nct_id = l.nct_id) AS conditions,
+               (SELECT string_agg(DISTINCT b.code, ' ' ORDER BY b.code)
+                FROM study_condition_codes b
+                WHERE b.nct_id = l.nct_id AND b.code_system = 'ICD10CM' AND b.via <> 'llm') AS before_codes,
+               array_to_string(l.codes, '; ') AS llm_codes,
+               CASE WHEN length(l.evidence) > 300 THEN l.evidence[:299] || '…' ELSE l.evidence END AS evidence
+        FROM (
+            SELECT nct_id, list(DISTINCT code || ' ' || label ORDER BY code || ' ' || label) AS codes,
+                   arg_min(evidence, code) AS evidence, min(code) AS first_code
+            FROM study_condition_codes SEMI JOIN s USING (nct_id)
+            WHERE code_system = 'ICD10CM' AND via = 'llm' AND match_type = 'exact'
+            GROUP BY nct_id
+            QUALIFY row_number() OVER (PARTITION BY first_code ORDER BY hash(nct_id)) = 1
+        ) l
+        ORDER BY hash(l.nct_id) LIMIT 10
+    """,
     "summary_stats": """
         SELECT
             COUNT(*)                                                         AS total_studies,
@@ -229,7 +279,7 @@ DURATION_QUERIES = {
     """,
 }
 
-SINGLE_ROW_QUERIES = {"summary_stats", "duration_summary"}
+SINGLE_ROW_QUERIES = {"summary_stats", "duration_summary", "llm_coverage"}
 ALL_QUERIES = sorted(set(OVERVIEW_QUERIES) | set(DURATION_QUERIES))
 
 
@@ -271,7 +321,8 @@ def build_query(name: str, filters: dict = None):
 _EMPTY_CONDITION_CODES = """
     CREATE VIEW IF NOT EXISTS study_condition_codes AS
     SELECT NULL::VARCHAR AS nct_id, NULL::VARCHAR AS code_system, NULL::VARCHAR AS code, NULL::VARCHAR AS label,
-           NULL::INTEGER AS icd10_chapter, NULL::VARCHAR AS icd10_category
+           NULL::INTEGER AS icd10_chapter, NULL::VARCHAR AS icd10_category, NULL::VARCHAR AS via,
+           NULL::VARCHAR AS match_type, NULL::VARCHAR AS evidence
     WHERE false
 """
 

@@ -140,6 +140,53 @@ def test_icd10_panel_queries():
     assert "C79" not in [r[0][:3] for r in run_query(con, "top_icd10_categories")["rows"]]
 
 
+def test_llm_tab_queries():
+    import duckdb
+
+    from ct_pipeline.queries import run_query
+
+    con = duckdb.connect()
+    con.execute("""CREATE TABLE studies AS FROM (VALUES
+        ('NCT1', 'PHASE3'), ('NCT2', 'PHASE3'), ('NCT3', 'PHASE3'), ('NCT4', 'PHASE3'), ('NCT5', 'PHASE1')
+    ) t(nct_id, phase_group)""")
+    con.execute("""CREATE TABLE study_conditions AS FROM (VALUES
+        ('NCT1', 'Hypertension'), ('NCT2', 'Solid Tumors'), ('NCT3', 'Advanced Cancer'), ('NCT4', 'Nausea'),
+        ('NCT4', 'Cancer')
+    ) t(nct_id, condition_name)""")
+    con.execute("""CREATE TABLE study_condition_codes AS FROM (VALUES
+        ('NCT1', 'ICD10CM', 'I10', 'Essential hypertension', 'mesh', 'exact', NULL, 'I10'),
+        ('NCT2', 'ICD10CM', 'C80.1', 'Malignant neoplasm, unspecified', 'mesh', 'broad', NULL, 'C80'),
+        ('NCT2', 'ICD10CM', 'C25', 'Malignant neoplasm of pancreas', 'llm', 'exact', 'pancreatic cancer', 'C25'),
+        ('NCT2', 'ICD10CM', 'C18', 'Malignant neoplasm of colon', 'llm', 'exact', 'colon cancer', 'C18'),
+        ('NCT3', 'ICD10CM', 'C80', 'Malignant neoplasm without specification', 'llm', 'broad', 'cancer', 'C80'),
+        ('NCT4', 'ICD10CM', 'R11', 'Nausea and vomiting', 'llm', 'exact', 'chronic nausea', 'R11'),
+        ('NCT5', 'ICD10CM', 'C34', 'Malignant neoplasm of bronchus and lung', 'llm', 'exact', 'NSCLC', 'C34')
+    ) t(nct_id, code_system, code, label, via, match_type, evidence, icd10_category)""")
+    assert run_query(con, "llm_coverage", {"phase": "PHASE3"}) == {
+        "total_studies": 4,
+        "exact_before": 1,
+        "exact_after": 3,
+        "broad_to_exact": 1,
+        "uncoded_to_exact": 1,
+        "llm_broad_only": 1,
+    }
+    assert run_query(con, "llm_top_categories", {"phase": "PHASE3"})["rows"] == [
+        ["C18 Malignant neoplasm of colon", 1],
+        ["C25 Malignant neoplasm of pancreas", 1],
+        ["R11 Nausea and vomiting", 1],
+    ]
+    rows = {r[0]: r[1:] for r in run_query(con, "llm_examples", {"phase": "PHASE3"})["rows"]}
+    assert rows == {
+        "NCT2": [
+            "Solid Tumors",
+            "C80.1",
+            "C18 Malignant neoplasm of colon; C25 Malignant neoplasm of pancreas",
+            "colon cancer",
+        ],
+        "NCT4": ["Cancer; Nausea", None, "R11 Nausea and vomiting", "chronic nausea"],
+    }
+
+
 def test_top_conditions_merges_healthy_volunteer_names(settings, store, site_store):
     names = {
         "NCT1": ["Healthy"],
