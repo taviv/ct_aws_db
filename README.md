@@ -8,10 +8,15 @@ Which studies are loaded is set by two stack parameters. By default that is ever
 study (Early Phase 1 → Phase 4, ~224k). `QueryTerm=AREA[Phase]PHASE1 StartYear=2016` limits it
 to Phase 1 (including Phase 1/2) studies starting in 2016 or later (~35k).
 
-Dashboards (paths under the `DashboardUrl` stack output):
-- `/`: overview (status, phases, sponsors, conditions, countries, enrollment), filterable by phase
-- `/dashboard_duration.html`: start → completion duration of completed studies
-- `/dashboard_llm.html`: what the LLM tier adds to ICD-10-CM coding (coverage before/after, categories, examples with protocol evidence, eval scorecard)
+On top of the raw data, each study's conditions get ICD-10-CM codes (see [Condition codes](#condition-codes)):
+deterministic MeSH/text mappings first, then an optional LLM tier that reads the protocol text. The three
+dashboards are described under [Dashboards](#dashboards).
+
+## Architecture
+
+Three processes write data: the weekly pipeline (Step Functions), the monthly Reference function, and
+LLM coding runs started by hand from CloudShell. All state is in two S3 buckets: `data` (private:
+raw, staging, curated snapshots, reference tables, caches) and `site` (dashboards and their JSON).
 
 ```
 EventBridge (weekly) ──► Step Functions
@@ -25,15 +30,31 @@ EventBridge (weekly) ──► Step Functions
                           │
                           └─ BuildSnapshot                           (BuildFunction, DuckDB)
                                 current snapshot − changed studies + staged rows
+                                + study_condition_codes from reference/CURRENT.json (if built)
                                 → s3://data/curated/<run_id>/<table>/data.parquet
                                 → s3://data/curated/CURRENT.json      (atomic pointer)
-                                → s3://site/data/overview.json        (overview dashboard data)
+                                → s3://site/data/overview.json        (dashboard data, per phase group)
                                 → Glue tables (Athena)                 → state/watermark.json
+
+EventBridge (monthly) or `make reference` ──► ReferenceFunction (DuckDB)
+      ICD-10-CM (CMS) + MONDO + Wikidata + curated CSVs (src/ct_pipeline/data/)
+      [+ UMLS, key in Secrets Manager]  + reference/llm_cache.json (verified LLM answers)
+      → s3://data/reference/<version>/<table>/data.parquet + reference/CURRENT.json
+      → recode: same studies, new study_condition_codes (run id <timestamp>-recode),
+        overview.json and Glue tables republished; no refetch
+
+CloudShell: `make llm-code` ──► Amazon Bedrock (Claude Haiku 4.5)
+      study_text of the current snapshot → s3://data/reference/llm_cache.json
+      (published as via='llm' by the next ReferenceFunction run)
 
 CloudFront ──► /*.html, /data/*  → S3 site bucket (private, OAC)
            └─► /api/query?...    → QueryFunction URL (IAM auth, only CloudFront can call it)
                                     DuckDB over the CURRENT snapshot, cached 15 min
 ```
+
+Every published snapshot is immutable; `curated/CURRENT.json` is the only thing a run swaps, so readers
+(Query function, Athena via Glue, `overview.json`) always see one complete snapshot. Reference data is
+versioned the same way (`reference/CURRENT.json`), and each snapshot records the `ref_version` it was coded with.
 
 ## Why this design
 
@@ -51,23 +72,27 @@ CloudFront ──► /*.html, /data/*  → S3 site bucket (private, OAC)
 ## Repository layout
 
 ```
-src/ct_pipeline/      one package, four Lambda handlers (handlers.py)
+src/ct_pipeline/      one package; handlers.py has the Fetch, Transform, Build and Reference handlers
   config.py           settings from env vars
   storage.py          S3 / local-directory store (local runs and tests need no AWS)
   fetch.py            API client: start / fetch_page / finalize
   transform.py        DuckDB SQL: NDJSON page → one Parquet file per table
   build.py            merge into new snapshot, overview JSON, watermark, pruning
   queries.py          dashboard SQL shared by build and query API
-  query_api.py        Function URL handler
+  query_api.py        Query function (Function URL) handler
+  reference.py        reference data: ICD-10-CM, MeSH crosswalks, curated CSVs, LLM codes
+  umls.py             optional UMLS lookups (cached, rate limited)
+  data/               curated mesh_overrides.csv and condition_text_rules.csv
   glue.py             registers the snapshot in the Glue catalog
   db.py               DuckDB connections that spill only under CT_WORK_DIR
   verify.py           data integrity checks behind `make verify`
   llm.py              LLM condition coding (Bedrock) for studies without an exact code
 scripts/condition_stats.py  condition-coding coverage per phase behind `make condition-stats`
-scripts/llm_code.py   LLM coding runs and evaluation behind `make llm-eval` / `make llm-code`
+scripts/llm_code.py   LLM coding runs and evaluation behind `make llm-eval` / `make llm-code` / `make llm-try`
+scripts/umls_coverage.py  what UMLS would add, behind `make umls-coverage`
 statemachine/         Step Functions definition (ASL)
 template.yaml         SAM template: buckets, functions, state machine, schedule, CloudFront, Athena
-dashboard/            static dashboards (Chart.js)
+dashboard/            static dashboards (Chart.js), see "Dashboards"
 scripts/              local_pipeline.py, dev_server.py, verify.py
 tests/                pytest (fixtures are real API records)
 ```
@@ -98,6 +123,7 @@ ClinicalTrials.gov publishes no ICD codes, only free-text conditions and the MeS
 |---|---|
 | `mesh` | one of the study's condition MeSH terms maps to the code |
 | `text` | a curated rule matches a free-text condition name (e.g. "Healthy Volunteers" → `Z00.6`), or UMLS maps the normalised name to exactly one concept with an ICD-10-CM code |
+| `llm` | for studies with no exact code from `mesh`/`text`: an ICD-10-CM category chosen by the LLM tier from the protocol text, with the verified quote in `evidence` (see below) |
 | `mesh_ancestor` | fallback when the study has no ICD-10-CM code otherwise: the most specific code reachable from a MeSH ancestor (`match_type = 'broad'`) |
 
 `match_type` is `exact` (same concept) or `broad` (the code is broader than the condition). Crosswalk
@@ -107,7 +133,7 @@ map (`broad`). ICD-10-CM itself (CMS, public domain) is downloaded for the curre
 ICD-10-CM code is validated against it.
 
 The Reference function (`make reference`, also monthly) writes `reference/<version>/{icd10cm_codes,
-condition_code_map,condition_text_map,condition_text_rules}` plus `reference/CURRENT.json`, then republishes the current snapshot
+condition_code_map,condition_text_map,condition_text_rules,condition_llm_codes}` plus `reference/CURRENT.json`, then republishes the current snapshot
 with recomputed codes (run id `<timestamp>-recode`), so no refetch is needed. Reference tables are also
 registered in Glue for Athena:
 
@@ -164,6 +190,33 @@ Phase 3 targets exceed the 8,000 sent.
 --price-cache-write` (USD per million tokens) add a cost estimate. In CloudShell, start long runs detached:
 `setsid nohup make llm-code MODEL=... > llm.log 2>&1 < /dev/null &`, then `tail -3 llm.log`.
 
+## Dashboards
+
+Static Chart.js pages in `dashboard/`, uploaded to the site bucket by `make deploy` (or `make dashboards`)
+and served through CloudFront under the `DashboardUrl` stack output. Every page has a phase-group selector.
+
+| Page | What it shows | Data |
+|---|---|---|
+| `/` (`dashboard.html`), Overview | summary cards; status; studies started by year; top 15 conditions (spelling variants merged, healthy volunteers as one bar); top 15 countries; ICD-10-CM chapters and top 15 categories (catch-all codes left out); sponsor class; intervention types; enrollment size; the 25 most recently started studies | `data/overview.json` |
+| `/dashboard_duration.html`, Study Duration | start → completion duration of completed studies: summary, histogram, by start year, by sponsor, by phase, list of studies; filters for phase, start year, country, multi-country and healthy volunteers | `/api/query` (duration queries); phase list from `data/overview.json` |
+| `/dashboard_llm.html`, LLM Coding | what the LLM tier adds: share of studies with an exact ICD-10-CM code before and after it, split into broad → exact and no code → exact; the top 15 categories it added; 10 example studies (conditions as written, earlier broad codes, LLM codes, quoted protocol evidence, link to ClinicalTrials.gov); the evaluation scorecard and method | `data/overview.json` (`llm_*` queries) |
+
+`data/overview.json` is written by Build and by every recode (`overview_payload` in `build.py`). It holds one
+block per phase group plus `ALL`, each with the result of every query in `OVERVIEW_QUERIES`. So:
+
+- A change to an overview query reaches the dashboard only after the next run or `make reference`;
+  `make deploy` alone updates the HTML and the API, not `overview.json`.
+- CloudFront caches `/data/*` for up to 15 minutes. To see a new `overview.json` at once:
+  `aws cloudfront create-invalidation --distribution-id <DistributionId output> --paths "/data/*"`.
+- To add a chart, add a query to `OVERVIEW_QUERIES` and draw it in the page's JavaScript. To add a page,
+  add its link to the `<nav>` of every page.
+
+On the LLM Coding page, "before" means the deterministic (`mesh`/`text`) codes alone. "No code → exact" also
+counts studies whose only earlier code was a `mesh_ancestor` fallback, because Build skips that fallback for
+studies that get LLM codes. The scorecard is static text in `dashboard_llm.html` (300 Phase 3 and Phase 2/3
+studies, scored against their MeSH-derived codes, which are themselves imperfect); update it after a new
+`make llm-eval`. The page opens on Phase 3, the first phase group the LLM tier was run for.
+
 ## Deploy
 
 Prerequisites: AWS CLI credentials, [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), Python 3.13 or Docker (`make build` uses a Docker build automatically when Python 3.13 is not installed).
@@ -189,6 +242,8 @@ Stack parameters:
 | `BuildMemorySize` | 3008 | Build Lambda memory (MB); new accounts are capped at 3008 |
 | `QueryReservedConcurrency` | 0 | reserved concurrency for the query API (0 = none) |
 | `Schedule` | `cron(0 6 ? * MON *)` | incremental run schedule |
+| `ReferenceSchedule` | `cron(0 3 2 * ? *)` | reference refresh + recode schedule |
+| `UmlsSecretName` | `ct-pipeline/umls-api-key` | Secrets Manager secret with the UMLS API key (optional) |
 | `KeepSnapshots` | 3 | curated snapshots kept for rollback |
 | `RawRetentionDays` | 180 | raw NDJSON lifecycle |
 | `GlueDatabaseName` | `clinical_trials` | Athena database |
@@ -217,6 +272,7 @@ Lambda sizing (`template.yaml`, Python 3.13):
 | Fetch | 512 MB | 2 min | default |
 | Transform (one 1,000-study page) | 2048 MB | 5 min | 2 GB |
 | Build | `BuildMemorySize` (3008 MB) | 15 min | 10 GB |
+| Reference | `BuildMemorySize` (3008 MB) | 15 min | 10 GB |
 | Query | 2048 MB | 30 s | 2 GB |
 
 The Lambda code directory is read-only. All DuckDB work, including spill files, goes under
@@ -226,7 +282,10 @@ The Lambda code directory is read-only. All DuckDB work, including spill files, 
 
 The weekly schedule (an EventBridge rule created with the stack) starts an incremental run every
 Monday 06:00 UTC. Each run fetches only studies updated since the previous successful run, merges
-them into the current snapshot, and republishes the dashboards' data.
+them into the current snapshot, and republishes the dashboards' data. A second rule runs the
+Reference function on the 2nd of every month at 03:00 UTC (`ReferenceSchedule`): it refreshes the reference
+data (new ICD-10-CM release, crosswalks, UMLS cache, LLM answers) and recodes the current snapshot.
+LLM coding is never scheduled; it runs only when started with `make llm-code`.
 
 ```bash
 # schedule is enabled
@@ -255,7 +314,8 @@ Queries: `duration_summary`, `duration_histogram`, `duration_by_year`, `duration
 `duration_by_phase`, `duration_studies`, plus every overview query (`summary_stats`,
 `status_breakdown`, `studies_by_year`, `top_conditions`, `top_countries`, `sponsor_class`,
 `fda_regulated`, `intervention_types`, `enrollment_distribution`, `recent_studies`,
-`phase_groups`, `countries_completed`). Duration queries cover completed studies only. `POST` with
+`phase_groups`, `countries_completed`, `icd10_chapters`, `top_icd10_categories`, `llm_coverage`,
+`llm_top_categories`, `llm_examples`). Duration queries cover completed studies only. `POST` with
 `{"query": ..., "filters": {...}}` is also accepted.
 
 ### Ad-hoc SQL
