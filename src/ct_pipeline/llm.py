@@ -19,11 +19,11 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v4"
+PROMPT_VERSION = "v5"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 8000
-MAX_CODES = 8
+MAX_CODES = 12
 CONFIDENCE = ("high", "medium", "low")
 # categories that name no specific site; always low confidence, so published as broad
 CATCH_ALL = ("C76", "C77", "C78", "C79", "C80", "C96")
@@ -42,6 +42,8 @@ INSTRUCTIONS = """You assign ICD-10-CM categories to clinical trial protocols.
 
 Code the disease or condition of the population the study enrolls. Do not code interventions, outcomes,
 adverse events, or conditions that are only exclusion criteria or comorbidities.
+If the study treats a symptom or complication (e.g. nausea, pain, anxiety, cachexia, thrombocytopenia) in
+patients with a disease, code that symptom or complication first; add the disease only if its site or type is named.
 Use the protocol text to resolve vague condition names: for "advanced solid tumors", code the specific cancers
 the eligibility criteria name; use C80 only if any solid tumor is eligible or no primary site is named, never
 next to site categories just because a generic term like "Advanced Cancer" is listed. Use the most specific

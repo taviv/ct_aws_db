@@ -195,6 +195,7 @@ def test_prompt_rules(catalog):
     system = llm.BedrockCoder("m", catalog[0], client=FakeBedrock(LUNG)).system
     assert "junction cancer is C16" in system and "never\nnext to site categories" in system
     assert "C77-C79 only when the study targets the metastases" in system
+    assert "code that symptom or complication first" in system
     assert "low = a generic fallback" in system
 
 
