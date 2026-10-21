@@ -326,6 +326,17 @@ def test_build_adds_llm_codes_only_for_studies_without_exact_codes(settings, sto
     assert evidence == {"llm": "lung"}
 
 
+def test_build_keeps_llm_z00_only_for_studies_with_healthy_volunteers(settings, store, site_store, curated):
+    answer = {"code": "Z00", "confidence": "high", "evidence": "Study", "evidence_found": True}
+    entry = {"model": "m", "prompt": "v1", "at": "2026-10-14T00:00:00+00:00", "codes": [answer]}
+    store.put_json(llm.CACHE_KEY, {"entries": {"NCT1": entry, "NCT2": entry}})
+    R.build_reference(store, settings.work_dir, get=fake_get())
+    healthy = _study("NCT1", ["Bioequivalence"])
+    healthy["protocolSection"]["eligibilityModule"]["healthyVolunteers"] = True
+    _build(settings, store, site_store, "R1", [healthy, _study("NCT2", ["Surgery"])])
+    assert [(n, c, via) for n, s, c, via, _, _ in _codes(store) if s == "ICD10CM"] == [("NCT1", "Z00", "llm")]
+
+
 def test_llm_code_script_eval_and_code(settings, store, site_store, curated, monkeypatch, capsys, tmp_path):
     import importlib.util
     import sys

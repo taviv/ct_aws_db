@@ -76,7 +76,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
                           condition_text_map (UMLS)
       via='llm'           for studies with no exact ICD-10-CM code yet: categories an LLM selected from the
                           protocol text with verified quoted evidence (condition_llm_codes, see llm.py);
-                          the quote is kept in `evidence` (NULL for the other vias)
+                          the quote is kept in `evidence` (NULL for the other vias); Z00 (healthy
+                          volunteers) only for studies that accept healthy volunteers
       via='mesh_ancestor' fallback for studies with no ICD-10-CM code yet: the most specific code reachable
                           from a MeSH ancestor; always match_type='broad'
     Expects study_conditions and condition_mesh_terms views (attach_snapshot).
@@ -123,6 +124,8 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             FROM {ref["condition_llm_codes"]} l
             WHERE l.nct_id IN (SELECT nct_id FROM study_conditions)
               AND l.nct_id NOT IN (SELECT nct_id FROM exact_coded)
+              -- the LLM also uses Z00 for patients with no named disease (e.g. surgical patients)
+              AND (l.code <> 'Z00' OR l.nct_id IN (SELECT nct_id FROM studies WHERE healthy_volunteers))
         ),
         coded AS (
             SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'

@@ -163,7 +163,9 @@ protocol text supporting each one; answers whose quote is not in the protocol ar
 cached per study in `reference/llm_cache.json`, keyed by a hash of the
 model input, so reruns only send new or changed studies. Codes are category level (e.g. C34, E11); `low`
 confidence and the catch-all categories C76-C80 and C96 (ill-defined, secondary or unspecified sites) are published as
-`match_type='broad'`. LLM codes never replace an exact code.
+`match_type='broad'`. An LLM Z00 (healthy volunteers) is published only for studies that accept healthy volunteers
+(`studies.healthy_volunteers`); the model also uses it for patients with no named disease. LLM codes never replace
+an exact code.
 
 ```bash
 make llm-eval MODEL=<model or inference-profile id>                     # scorecard: ~300 studies with exact MeSH codes
