@@ -172,6 +172,19 @@ def test_build_reference_writes_versioned_tables(store, settings, curated):
     assert _table(store, pointer, "icd10cm_codes").count("*").fetchone()[0] == pointer["row_counts"]["icd10cm_codes"]
 
 
+def test_build_reference_keeps_new_versions_and_cache_files(store, settings, curated):
+    for name in ("llm_cache.json", "llm_eval_cache.json", "umls_cache.json"):
+        store.put_json(f"reference/{name}", {"entries": {}})
+    for day in range(1, 6):
+        pointer = R.build_reference(
+            store, settings.work_dir, get=fake_get(), now=datetime(2026, 10, day, tzinfo=timezone.utc)
+        )
+    versions = {k.split("/")[1] for k in store.list_keys("reference/") if k.count("/") > 1}
+    assert versions == {"20261003T000000Z", "20261004T000000Z", "20261005T000000Z"}
+    assert all(store.get_json(f"reference/{n}") is not None for n in ("llm_cache.json", "umls_cache.json"))
+    assert _table(store, pointer, "icd10cm_codes").count("*").fetchone()[0] > 0
+
+
 def test_build_reference_falls_back_to_previous_fiscal_year(store, settings, curated):
     pointer = R.build_reference(store, settings.work_dir, get=fake_get(fy=2026), today=date(2026, 10, 12))
     assert pointer["sources"]["icd10cm"]["fiscal_year"] == 2026

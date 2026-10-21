@@ -567,7 +567,8 @@ def download_reference(store, dest: Path) -> dict | None:
 
 
 def _prune_versions(store, keep: int) -> None:
-    keys = [k for k in store.list_keys(REFERENCE_PREFIX) if k != REFERENCE_CURRENT_KEY]
-    versions = sorted({k[len(REFERENCE_PREFIX) :].split("/", 1)[0] for k in keys})
+    # only version directories; cache files such as reference/llm_cache.json sit next to them
+    names = [k[len(REFERENCE_PREFIX) :] for k in store.list_keys(REFERENCE_PREFIX)]
+    versions = sorted({n.split("/", 1)[0] for n in names if "/" in n})
     for old in versions[:-keep]:
         store.delete_prefix(f"{REFERENCE_PREFIX}{old}/")
