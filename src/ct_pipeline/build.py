@@ -77,10 +77,12 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
       via='llm'           for studies with no exact ICD-10-CM code yet: categories an LLM selected from the
                           protocol text with verified quoted evidence (condition_llm_codes, see llm.py);
                           the quote is kept in `evidence` (NULL for the other vias); Z00 (healthy
-                          volunteers) only for studies that accept healthy volunteers
+                          volunteers) only for studies that accept healthy volunteers and are not vaccine trials
+      via='intervention'  Z23 (encounter for immunization) for vaccine trials: the study accepts healthy volunteers
+                          and its title or an intervention name/description mentions a vaccine
       via='mesh_ancestor' fallback for studies with no ICD-10-CM code yet: the most specific code reachable
                           from a MeSH ancestor; always match_type='broad'
-    Expects study_conditions and condition_mesh_terms views (attach_snapshot).
+    Expects studies, study_conditions, study_interventions and condition_mesh_terms views (attach_snapshot).
     """
     ref = {t: f"read_parquet({_q(ref_dir / t / 'data.parquet')})" for t in REFERENCE_TABLES}
     out = out_dir / "study_condition_codes" / "data.parquet"
@@ -117,6 +119,16 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM' AND match_type = 'exact'
             UNION SELECT nct_id FROM text_map WHERE code_system = 'ICD10CM' AND match_type = 'exact'
         ),
+        vaccine AS (
+            SELECT s.nct_id, 'ICD10CM' AS code_system, 'Z23' AS code, NULL::VARCHAR AS label, 'intervention' AS via,
+                   NULL::VARCHAR AS mesh_id, NULL::VARCHAR AS mesh_term, NULL::VARCHAR AS condition_name,
+                   'exact' AS match_type, 'curated' AS source, NULL::VARCHAR AS evidence
+            FROM studies s
+            WHERE s.healthy_volunteers
+              AND (lower(s.brief_title) LIKE '%vaccin%'
+                   OR s.nct_id IN (SELECT nct_id FROM study_interventions
+                                   WHERE lower(concat_ws(' ', name, description)) LIKE '%vaccin%'))
+        ),
         llm AS (
             SELECT DISTINCT l.nct_id, l.code_system, l.code, NULL::VARCHAR AS label, 'llm' AS via,
                    NULL::VARCHAR AS mesh_id, NULL::VARCHAR AS mesh_term, NULL::VARCHAR AS condition_name,
@@ -125,13 +137,15 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
             WHERE l.nct_id IN (SELECT nct_id FROM study_conditions)
               AND l.nct_id NOT IN (SELECT nct_id FROM exact_coded)
               -- the LLM also uses Z00 for patients with no named disease (e.g. surgical patients)
-              AND (l.code <> 'Z00' OR l.nct_id IN (SELECT nct_id FROM studies WHERE healthy_volunteers))
+              AND (l.code <> 'Z00' OR l.nct_id IN (SELECT nct_id FROM studies WHERE healthy_volunteers
+                                                   EXCEPT SELECT nct_id FROM vaccine))
         ),
         coded AS (
             SELECT nct_id FROM direct WHERE code_system = 'ICD10CM'
             UNION SELECT nct_id FROM text WHERE code_system = 'ICD10CM'
             UNION SELECT nct_id FROM text_map WHERE code_system = 'ICD10CM'
             UNION SELECT nct_id FROM llm
+            UNION SELECT nct_id FROM vaccine
         ),
         ancestor AS (
             SELECT DISTINCT t.nct_id, m.code_system, m.code, m.label, 'mesh_ancestor' AS via, t.mesh_id,
@@ -149,7 +163,7 @@ def code_conditions(con, ref_dir: Path, out_dir: Path, ref_version: str) -> int:
         ),
         coded_all AS (
             SELECT * FROM direct UNION ALL SELECT * FROM text UNION ALL SELECT * FROM text_map
-            UNION ALL SELECT * FROM llm UNION ALL SELECT * FROM best_ancestor
+            UNION ALL SELECT * FROM llm UNION ALL SELECT * FROM vaccine UNION ALL SELECT * FROM best_ancestor
         )
         SELECT a.nct_id, a.code_system, a.code, coalesce(i.description, a.label) AS label,
                i.chapter AS icd10_chapter, i.block AS icd10_block, i.category AS icd10_category,

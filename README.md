@@ -123,6 +123,7 @@ ClinicalTrials.gov publishes no ICD codes, only free-text conditions and the MeS
 |---|---|
 | `mesh` | one of the study's condition MeSH terms maps to the code |
 | `text` | a curated rule matches a free-text condition name (e.g. "Healthy Volunteers" → `Z00.6`), or UMLS maps the normalised name to exactly one concept with an ICD-10-CM code |
+| `intervention` | `Z23` (encounter for immunization) for vaccine trials: the study accepts healthy volunteers and its title or an intervention mentions a vaccine. An LLM `Z00` is not published for these |
 | `llm` | for studies with no exact code from `mesh`/`text`: an ICD-10-CM category chosen by the LLM tier from the protocol text, with the verified quote in `evidence` (see below) |
 | `mesh_ancestor` | fallback when the study has no ICD-10-CM code otherwise: the most specific code reachable from a MeSH ancestor (`match_type = 'broad'`) |
 
@@ -216,7 +217,7 @@ and served through CloudFront under the `DashboardUrl` stack output. Every page 
 
 | Page | What it shows | Data |
 |---|---|---|
-| `/` (`dashboard.html`), Overview | summary cards; status; studies started by year; top 15 conditions (spelling variants merged, healthy volunteers as one bar); top 15 countries; ICD-10-CM chapters and top 15 categories (catch-all codes left out); sponsor class; intervention types; enrollment size; the 25 most recently started studies | `data/overview.json` |
+| `/` (`dashboard.html`), Overview | summary cards; status; studies started by year; top 15 conditions (spelling variants merged, healthy volunteers as one bar); top 15 countries; ICD-10-CM chapters and top 15 categories (catch-all codes and healthy-population categories Z00/Z23 left out; the latter get their own card, with the number of vaccine trials); sponsor class; intervention types; enrollment size; the 25 most recently started studies | `data/overview.json` |
 | `/dashboard_duration.html`, Study Duration | start → completion duration of completed studies: summary, histogram, by start year, by sponsor, by phase, list of studies; filters for phase, start year, country, multi-country and healthy volunteers | `/api/query` (duration queries); phase list from `data/overview.json` |
 | `/dashboard_llm.html`, LLM Coding | what the LLM tier adds: share of studies with an exact ICD-10-CM code before and after it, split into broad → exact and no code → exact; the top 15 categories it added; 10 example studies (conditions as written, earlier broad codes, LLM codes, quoted protocol evidence, link to ClinicalTrials.gov); the evaluation scorecard and method | `data/overview.json` (`llm_*` queries) |
 

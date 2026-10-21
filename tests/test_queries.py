@@ -126,6 +126,8 @@ def test_icd10_panel_queries():
         ('NCT1', 'ICD10CM', 'C79.9', 'Secondary malignant neoplasm of unspecified site', 2, 'C79'),
         ('NCT2', 'ICD10CM', 'C85.9', 'Non-Hodgkin lymphoma, unspecified', 2, 'C85'),
         ('NCT2', 'ICD10CM', 'C85.1', 'Unspecified B-cell lymphoma', 2, 'C85'),
+        ('NCT1', 'ICD10CM', 'Z00', 'Encounter for general examination', 21, 'Z00'),
+        ('NCT2', 'ICD10CM', 'Z23', 'Encounter for immunization', 21, 'Z23'),
         ('NCT2', 'UMLS', 'x', 'x', NULL, NULL)
     ) t(nct_id, code_system, code, label, icd10_chapter, icd10_category)""")
     assert run_query(con, "icd10_chapters")["rows"] == [
@@ -138,6 +140,7 @@ def test_icd10_panel_queries():
         ["E11 Type 2 diabetes mellitus", 1],
     ]
     assert "C79" not in [r[0][:3] for r in run_query(con, "top_icd10_categories")["rows"]]
+    assert run_query(con, "healthy_population") == {"studies": 2, "vaccine": 1}
 
 
 def test_llm_tab_queries():

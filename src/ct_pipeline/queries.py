@@ -60,6 +60,11 @@ _ICD10_CHAPTER_LIST = "[" + ", ".join(f"'{c}'" for c in _ICD10_CHAPTERS) + "]"
 # unspecified immune disorder (generic Immune System Diseases).
 _ICD10_CATCH_ALL = ("C79.9", "C76.0", "C85.9", "D89.9")
 
+# Healthy-population categories (healthy volunteers, vaccination): left out of the disease charts and counted in the
+# healthy_population card instead.
+_HEALTHY_POPULATION = ("Z00", "Z23")
+_HEALTHY_POPULATION_LIST = ", ".join(f"'{c}'" for c in _HEALTHY_POPULATION)
+
 
 def _healthy_pattern() -> str:
     """The curated healthy-volunteer rule (data/condition_text_rules.csv), so the chart and Z00.6 coding agree."""
@@ -78,6 +83,7 @@ OVERVIEW_QUERIES = {
         SELECT {_ICD10_CHAPTER_LIST}[icd10_chapter] AS label, COUNT(DISTINCT nct_id) AS value
         FROM study_condition_codes SEMI JOIN s USING (nct_id)
         WHERE code_system = 'ICD10CM' AND icd10_chapter BETWEEN 1 AND {len(_ICD10_CHAPTERS)}
+          AND (icd10_category IS NULL OR icd10_category NOT IN ({_HEALTHY_POPULATION_LIST}))
         GROUP BY icd10_chapter ORDER BY 2 DESC, 1
     """,
     "top_icd10_categories": f"""
@@ -87,9 +93,16 @@ OVERVIEW_QUERIES = {
             FROM study_condition_codes SEMI JOIN s USING (nct_id)
             WHERE code_system = 'ICD10CM' AND icd10_category IS NOT NULL
               AND code NOT IN ({", ".join(f"'{c}'" for c in _ICD10_CATCH_ALL)})
+              AND icd10_category NOT IN ({_HEALTHY_POPULATION_LIST})
             GROUP BY icd10_category
         )
         ORDER BY 2 DESC, 1 LIMIT 15
+    """,
+    "healthy_population": f"""
+        SELECT COUNT(DISTINCT nct_id) AS studies,
+               COUNT(DISTINCT nct_id) FILTER (WHERE icd10_category = 'Z23') AS vaccine
+        FROM study_condition_codes SEMI JOIN s USING (nct_id)
+        WHERE code_system = 'ICD10CM' AND icd10_category IN ({_HEALTHY_POPULATION_LIST})
     """,
     # LLM coding tab. "Before" is the deterministic codes alone; LLM codes are only added for studies with no
     # exact deterministic code, which also get no MeSH-ancestor fallback.
@@ -279,7 +292,7 @@ DURATION_QUERIES = {
     """,
 }
 
-SINGLE_ROW_QUERIES = {"summary_stats", "duration_summary", "llm_coverage"}
+SINGLE_ROW_QUERIES = {"summary_stats", "duration_summary", "llm_coverage", "healthy_population"}
 ALL_QUERIES = sorted(set(OVERVIEW_QUERIES) | set(DURATION_QUERIES))
 
 
