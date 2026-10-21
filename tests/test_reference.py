@@ -24,7 +24,10 @@ TABULAR = b"""<?xml version="1.0"?>
     </sectionIndex>
   </chapter>
   <chapter><name>21</name><desc>Factors influencing health status (Z00-Z99)</desc>
-    <sectionIndex><sectionRef first="Z00" last="Z13" id="Z00-Z13">Examinations</sectionRef></sectionIndex>
+    <sectionIndex>
+      <sectionRef first="Z00" last="Z13" id="Z00-Z13">Examinations</sectionRef>
+      <sectionRef first="Z20" last="Z29" id="Z20-Z29">Communicable diseases</sectionRef>
+    </sectionIndex>
   </chapter>
 </ICD10CM.tabular>
 """
@@ -44,6 +47,7 @@ ORDER = "\n".join(
         _order_line(6, "C801", 1, "Malignant (primary) neoplasm, unspecified"),
         _order_line(7, "Z00", 0, "Encounter for general examination"),
         _order_line(8, "Z006", 1, "Encounter for examination for normal comparison and control in clinical research"),
+        _order_line(9, "Z23", 1, "Encounter for immunization"),
     ]
 )
 
@@ -306,8 +310,8 @@ def test_recode_applies_new_reference_without_refetch(settings, store, site_stor
     assert current["previous_run_id"] == "R1" and current["row_counts"]["studies"] == 1
     assert [c[:3] for c in _codes(store)] == [("NCT1", "ICD10CM", "Z00.6")]
     overview = site_store.get_json(OVERVIEW_KEY)["by_phase"]["ALL"]
-    assert overview["icd10_chapters"]["rows"] == [["Health status and services (Z00-Z99)", 1]]
-    assert [r[0][:3] for r in overview["top_icd10_categories"]["rows"]] == ["Z00"]
+    assert overview["icd10_chapters"]["rows"] == [] and overview["top_icd10_categories"]["rows"] == []
+    assert overview["healthy_population"] == {"studies": 1, "vaccine": 0}
 
 
 def test_build_adds_llm_codes_only_for_studies_without_exact_codes(settings, store, site_store, curated):
@@ -529,3 +533,29 @@ def test_llm_code_script_cloud_and_status(monkeypatch, capsys):
     assert "llm-1: RUNNING (started 2026-10-19 14:00 UTC, model m)" in out
     assert "2 passes done: 90 new answers; 10 of 100 studies still to code; 1 failed calls" in out
     assert "estimated cost $2.00" in out
+
+
+def test_build_codes_healthy_volunteer_vaccine_trials_as_z23(settings, store, site_store, curated):
+    z00 = {"code": "Z00", "confidence": "high", "evidence": "Study", "evidence_found": True}
+    entry = {"model": "m", "prompt": "v1", "at": "2026-10-14T00:00:00+00:00", "codes": [z00]}
+    store.put_json(llm.CACHE_KEY, {"entries": {n: entry for n in ("NCT1", "NCT2", "NCT3")}})
+    R.build_reference(store, settings.work_dir, get=fake_get())
+    studies = [_study(n, ["Pneumococcal Immunization"]) for n in ("NCT1", "NCT2", "NCT3", "NCT4")]
+    for s, healthy, name in zip(
+        studies,
+        (True, True, False, True),
+        ("PCV21 Vaccine", "Bioequivalence tablet", "PCV21 Vaccine", "Placebo"),
+        strict=True,
+    ):
+        s["protocolSection"]["eligibilityModule"]["healthyVolunteers"] = healthy
+        s["protocolSection"]["armsInterventionsModule"] = {"interventions": [{"type": "BIOLOGICAL", "name": name}]}
+    studies[3]["protocolSection"]["identificationModule"]["briefTitle"] = "Hepatitis B Vaccination in Adults"
+    _build(settings, store, site_store, "R1", studies)
+    assert sorted((n, c, via) for n, s, c, via, _, _ in _codes(store) if s == "ICD10CM") == [
+        ("NCT1", "Z23", "intervention"),
+        ("NCT2", "Z00", "llm"),
+        ("NCT4", "Z23", "intervention"),
+    ]
+    overview = site_store.get_json(OVERVIEW_KEY)["by_phase"]["ALL"]
+    assert overview["healthy_population"] == {"studies": 3, "vaccine": 2}
+    assert overview["icd10_chapters"]["rows"] == [] and overview["top_icd10_categories"]["rows"] == []

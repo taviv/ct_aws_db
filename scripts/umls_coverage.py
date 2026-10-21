@@ -55,14 +55,16 @@ def main() -> None:
         sys.exit("No published snapshot yet (curated/CURRENT.json)")
     with tempfile.TemporaryDirectory(prefix="ct-umls-") as tmp:
         work = Path(tmp)
-        for table in ("studies", "study_conditions", "condition_mesh_terms"):
+        for table in ("studies", "study_conditions", "condition_mesh_terms", "study_interventions"):
             store.download(current["tables"][table], work / "snapshot" / table / "data.parquet")
         before = work / "before"
         reference = download_reference(store, before)
         if reference is None:
             sys.exit("No reference yet: run `make reference` first")
         con = connect(work)
-        attach_snapshot(con, work / "snapshot", ["studies", "study_conditions", "condition_mesh_terms"])
+        attach_snapshot(
+            con, work / "snapshot", ["studies", "study_conditions", "condition_mesh_terms", "study_interventions"]
+        )
 
         mesh_ids, texts = umls.lookup_inputs(con)
         print(f"Snapshot {current['run_id']}, reference {reference['version']}")

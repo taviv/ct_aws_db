@@ -168,7 +168,8 @@
     <div class="card blue"><div class="label">Recruiting</div><div class="value" id="c-recruiting">—</div></div>
     <div class="card yellow"><div class="label">Active (Not Recruiting)</div><div class="value" id="c-active">—</div></div>
     <div class="card accent"><div class="label">FDA Regulated Drug</div><div class="value" id="c-fda">—</div></div>
-    <div class="card"><div class="label">Healthy Volunteers</div><div class="value" id="c-hv">—</div></div>
+    <div class="card"><div class="label">Healthy Volunteers</div><div class="value" id="c-hv">—</div><div class="sub">accept healthy volunteers</div></div>
+    <div class="card"><div class="label">Healthy-Population Studies</div><div class="value" id="c-healthy-pop">—</div><div class="sub" id="c-healthy-pop-sub">ICD-10-CM Z00/Z23</div></div>
     <div class="card green"><div class="label">Has Results</div><div class="value" id="c-results">—</div></div>
     <div class="card red"><div class="label">Terminated</div><div class="value" id="c-terminated">—</div></div>
   </div>
@@ -187,8 +188,8 @@
 
   <!-- Row 2b: ICD-10-CM coding -->
   <div class="chart-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:28px">
-    <div class="chart-box"><h2>Studies by ICD-10-CM Chapter</h2><canvas id="chart-icd10-chapters" height="380"></canvas></div>
-    <div class="chart-box"><h2>Top 15 ICD-10-CM Categories</h2><canvas id="chart-icd10-categories" height="380"></canvas></div>
+    <div class="chart-box"><h2>Studies by ICD-10-CM Chapter <small>(excl. healthy volunteers, vaccination)</small></h2><canvas id="chart-icd10-chapters" height="380"></canvas></div>
+    <div class="chart-box"><h2>Top 15 ICD-10-CM Categories <small>(excl. healthy volunteers, vaccination)</small></h2><canvas id="chart-icd10-categories" height="380"></canvas></div>
   </div>
 
   <!-- Row 3: sponsor class, intervention types, enrollment -->
@@ -274,6 +275,10 @@ async function loadSummary() {
   document.getElementById("c-hv").textContent        = fmt(d.healthy_volunteers);
   document.getElementById("c-results").textContent   = fmt(d.has_results);
   document.getElementById("c-terminated").textContent = fmt(d.terminated);
+  const h = await query("healthy_population").catch(() => ({}));
+  document.getElementById("c-healthy-pop").textContent = fmt(h.studies);
+  document.getElementById("c-healthy-pop-sub").textContent =
+    h.vaccine == null ? "ICD-10-CM Z00/Z23" : `${fmt(h.vaccine)} vaccine trials · not in disease charts`;
 }
 
 // ── Status donut ───────────────────────────────────────────────────────────
