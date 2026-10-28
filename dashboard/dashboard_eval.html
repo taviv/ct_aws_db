@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coding Eval · ClinicalTrials Clinical Trials Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3e;
+      --text:     #e2e8f0;
+      --muted:    #8892a4;
+      --accent:   #6366f1;
+      --green:    #22c55e;
+      --yellow:   #eab308;
+      --red:      #ef4444;
+      --blue:     #3b82f6;
+      --purple:   #a855f7;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    #refresh-btn {
+      background: var(--accent); color: #fff; border: none;
+      padding: 8px 18px; border-radius: 6px; cursor: pointer;
+      font-size: 0.85rem; font-weight: 600; transition: opacity .2s;
+    }
+    #refresh-btn:hover { opacity: .85; }
+    #refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Nav ── */
+    nav {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex; gap: 4px;
+    }
+    nav a {
+      display: inline-block; padding: 10px 16px;
+      font-size: 0.82rem; font-weight: 600; text-decoration: none;
+      color: var(--muted); border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Layout ── */
+    main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ── Summary cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 16px; margin-bottom: 28px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px 18px;
+    }
+    .card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+                   letter-spacing: .06em; margin-bottom: 8px; }
+    .card .value { font-size: 1.9rem; font-weight: 700; line-height: 1; }
+    .card .sub   { font-size: 0.75rem; color: var(--muted); margin-top: 5px; }
+    .card.green .value { color: var(--green); }
+    .card.blue  .value { color: var(--blue);  }
+    .card.yellow .value { color: var(--yellow); }
+    .card.red   .value { color: var(--red);   }
+    .card.accent .value { color: var(--accent); }
+    .card.purple .value { color: var(--purple); }
+
+    /* ── Chart grid ── */
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 20px; margin-bottom: 28px;
+    }
+    .chart-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px;
+    }
+    .chart-box h2 {
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    .chart-box canvas { width: 100% !important; }
+
+    /* ── Table ── */
+    .table-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px; overflow-x: auto;
+    }
+    .table-box h2 {
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    th {
+      text-align: left; padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 600;
+      text-transform: uppercase; font-size: 0.72rem; letter-spacing: .05em;
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(99,102,241,.06); }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 0.7rem; font-weight: 600; white-space: nowrap;
+    }
+    .badge.agree        { background:#16533a; color:#4ade80; }
+    .badge.chapter_only { background:#1e3a5f; color:#60a5fa; }
+    .badge.disagree     { background:#4c1d1d; color:#f87171; }
+    .badge.llm_only     { background:#3b2f5f; color:#c084fc; }
+    .badge.classic_only { background:#3b2f00; color:#fbbf24; }
+    .badge.neither      { background:#2d2d2d; color:#9ca3af; }
+
+    /* ── Loading / error ── */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin .6s linear infinite; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { color: var(--red); font-size: 0.82rem; padding: 8px 0; }
+
+    /* ── Eval tab ── */
+    .intro { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; max-width: 960px; line-height: 1.5; }
+    .split { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin: 6px 0 10px; }
+    .split div { height: 100%; }
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.8rem; color: var(--muted); }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+    .quality ul { margin: 6px 0 14px 18px; font-size: 0.83rem; line-height: 1.6; }
+    .quality p { font-size: 0.83rem; color: var(--muted); line-height: 1.5; }
+    .quality b { color: var(--text); }
+    td.evidence { color: var(--muted); font-style: italic; max-width: 480px; }
+    td.codes { white-space: nowrap; }
+    td.empty { color: var(--muted); text-align: center; padding: 24px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .filters button {
+      background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+      padding: 5px 12px; border-radius: 999px; cursor: pointer; font-size: 0.78rem; font-weight: 600;
+    }
+    .filters button:hover { color: var(--text); }
+    .filters button.on { color: var(--accent); border-color: var(--accent); }
+    .via { color: var(--muted); font-size: 0.72rem; }
+    .unverified { text-decoration: line-through; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚗️ ClinicalTrials.gov — Clinical Trials Dashboard</h1>
+    <p id="last-updated">Loading…</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button id="refresh-btn" onclick="EVAL = null; loadAll()">↻ Refresh</button>
+  </div>
+</header>
+
+<nav>
+  <a href="dashboard.html">Overview</a>
+  <a href="dashboard_duration.html">Study Duration</a>
+  <a href="dashboard_llm.html">LLM Coding</a>
+  <a href="dashboard_eval.html" class="active">Coding Eval</a>
+</nav>
+
+<main>
+  <p class="intro" id="intro">
+    Cross-evaluation: a random sample of Phase-3 studies (healthy-volunteer and vaccine trials excluded),
+    each coded two ways — <b>classic</b>, the deterministic pipeline (MeSH and UMLS crosswalks, curated
+    text rules, MeSH-ancestor fallback), and <b>LLM</b>, which reads the protocol text (summary, detailed
+    description, eligibility criteria) and picks ICD-10-CM categories with quoted evidence.
+  </p>
+
+  <!-- 1. Headline cards -->
+  <div class="cards">
+    <div class="card"><div class="label">Studies sampled</div><div class="value" id="c-n">—</div><div class="sub" id="c-n-sub"></div></div>
+    <div class="card blue"><div class="label">Coded by classic</div><div class="value" id="c-classic">—</div><div class="sub" id="c-classic-sub"></div></div>
+    <div class="card purple"><div class="label">Coded by LLM</div><div class="value" id="c-llm">—</div><div class="sub" id="c-llm-sub"></div></div>
+    <div class="card green"><div class="label">Category agreement</div><div class="value" id="c-agree">—</div><div class="sub" id="c-agree-sub"></div></div>
+    <div class="card accent"><div class="label">LLM-only yield</div><div class="value" id="c-yield">—</div><div class="sub">no exact classic code</div></div>
+    <div class="card yellow"><div class="label">Reviewed by hand</div><div class="value" id="c-reviewed">—</div><div class="sub" id="c-reviewed-sub"></div></div>
+  </div>
+  <div class="chart-box" style="margin-bottom:28px">
+    <h2>Verdict per study</h2>
+    <div class="split" id="split"></div>
+    <div class="legend" id="split-legend"></div>
+  </div>
+
+  <div class="chart-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:28px">
+    <!-- 2. Confidence calibration -->
+    <div class="chart-box"><h2>LLM codes matching a classic code, by confidence</h2><canvas id="chart-conf" height="300"></canvas></div>
+    <!-- 3. Adjudication / method -->
+    <div class="chart-box quality" id="adjudication"><h2>Hand review</h2><p>Loading…</p></div>
+  </div>
+
+  <!-- 4. Study table -->
+  <div class="table-box">
+    <h2>All sampled studies</h2>
+    <div class="filters" id="filters"></div>
+    <table>
+      <thead><tr><th>Study</th><th>Conditions</th><th>Classic codes</th><th>LLM codes</th><th>Verdict</th><th>LLM evidence</th><th>Check</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const EVAL_URL = "data/eval.json";
+const charts = {};
+let EVAL = null;
+let filter = "all";
+
+const VERDICTS = [
+  ["agree",        "Agree",          "#22c55e"],
+  ["chapter_only", "Same chapter",   "#3b82f6"],
+  ["disagree",     "Disagree",       "#ef4444"],
+  ["llm_only",     "LLM only",       "#a855f7"],
+  ["classic_only", "Classic only",   "#eab308"],
+  ["neither",      "Neither",        "#4b5563"],
+];
+
+async function loadEval() {
+  if (EVAL) return EVAL;
+  const res = await fetch(EVAL_URL, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} — no evaluation yet (run make llm-xeval)`);
+  EVAL = await res.json();
+  return EVAL;
+}
+
+function fmt(n) { return n == null ? "—" : Number(n).toLocaleString(); }
+function pct(n, total) { return total ? `${(100 * n / total).toFixed(1)}%` : "—"; }
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function clip(s, n) { s = s || ""; return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+function renderCards(d) {
+  const h = d.headline, n = h.studies || 0;
+  document.getElementById("c-n").textContent = fmt(n);
+  document.getElementById("c-n-sub").textContent =
+    `of ${fmt(d.pool && d.pool.eligible)} eligible Phase 3 · ${fmt(d.pool && d.pool.healthy)} healthy, ` +
+    `${fmt(d.pool && d.pool.vaccine)} vaccine excluded`;
+  document.getElementById("c-classic").textContent = pct(h.classic_coded, n);
+  document.getElementById("c-classic-sub").textContent = `${fmt(h.classic_exact)} exact (${pct(h.classic_exact, n)})`;
+  document.getElementById("c-llm").textContent = pct(h.llm_verified, n);
+  document.getElementById("c-llm-sub").textContent = `${fmt(h.llm_exact)} publishable as exact (${pct(h.llm_exact, n)})`;
+  const agree = (h.verdicts.agree || 0) + (h.verdicts.chapter_only || 0);
+  document.getElementById("c-agree").textContent = pct(h.verdicts.agree, h.both_coded);
+  document.getElementById("c-agree-sub").textContent =
+    `${fmt(h.both_coded)} coded by both · +${fmt(h.verdicts.chapter_only)} same chapter`;
+  document.getElementById("c-yield").textContent = fmt(h.llm_yield_where_not_exact);
+  document.getElementById("c-reviewed").textContent = d.adjudicated ? fmt(d.adjudicated.reviewed) : "0";
+  document.getElementById("c-reviewed-sub").textContent =
+    `${fmt(n - (h.verdicts.agree || 0) - (d.adjudicated ? d.adjudicated.reviewed : 0))} left to check`;
+}
+
+function renderSplit(d) {
+  const v = d.headline.verdicts, n = d.headline.studies || 1;
+  const parts = VERDICTS.map(([k, label, color]) => [label, v[k] || 0, color]);
+  document.getElementById("split").innerHTML = parts.map(([l, m, c]) =>
+    `<div title="${l}: ${fmt(m)}" style="width:${100 * m / n}%;background:${c}"></div>`).join("");
+  document.getElementById("split-legend").innerHTML = parts.map(([l, m, c]) =>
+    `<span><i style="background:${c}"></i>${l}: <b>${fmt(m)}</b> (${pct(m, n)})</span>`).join("");
+}
+
+function renderConf(d) {
+  const b = d.headline.by_confidence || {};
+  const order = ["high", "medium", "low"].filter(k => b[k]);
+  if (charts.conf) charts.conf.destroy();
+  charts.conf = new Chart(document.getElementById("chart-conf"), {
+    type: "bar",
+    data: {
+      labels: order.map(k => `${k} (${b[k].codes} codes)`),
+      datasets: [
+        { label: "any classic code", data: order.map(k => 100 * b[k].match_any / b[k].codes), backgroundColor: "#6366f1", borderRadius: 4 },
+        { label: "exact classic code", data: order.map(k => 100 * b[k].match_exact / b[k].codes), backgroundColor: "#22c55e", borderRadius: 4 },
+      ],
+    },
+    options: {
+      scales: {
+        x: { ticks: { color: "#e2e8f0" }, grid: { display: false } },
+        y: { ticks: { color: "#8892a4", callback: v => v + "%" }, grid: { color: "#2a2d3e" }, max: 100 },
+      },
+      plugins: { legend: { labels: { color: "#8892a4", boxWidth: 12 } } },
+    },
+  });
+}
+
+function renderAdjudication(d) {
+  const box = document.getElementById("adjudication");
+  const h = d.headline;
+  const ref = h.recall_vs_exact == null ? "" :
+    `<li>Treating the exact classic codes as reference: LLM recall <b>${(100 * h.recall_vs_exact).toFixed(0)}%</b>,
+     precision <b>${(100 * h.precision_vs_exact).toFixed(0)}%</b></li>`;
+  let review;
+  if (d.adjudicated && d.adjudicated.reviewed) {
+    const a = d.adjudicated;
+    review = `<p>Hand labels on <b>${a.reviewed}</b> disagreements:
+      LLM right <b>${a.llm}</b>, classic right <b>${a.classic}</b>, both defensible <b>${a.both}</b>,
+      neither <b>${a.neither}</b>.</p>`;
+  } else {
+    review = `<p><b>Not hand-reviewed yet.</b> Non-agreeing studies are in the review CSV
+      (make llm-xeval … --review …, then make llm-adjudicate FILE=…). Classic codes can be wrong too
+      (CT.gov's derived MeSH is noisy), so disagreement is not the same as LLM error.</p>`;
+  }
+  box.innerHTML = `<h2>How to read this</h2><ul>
+      <li><b>Agree</b>: at least one shared ICD-10-CM category; <b>same chapter</b>: same disease family only.</li>
+      <li><b>LLM only</b>: the model coded a study the deterministic pipeline left uncoded (incl. broad-only).</li>
+      ${ref}
+      <li>LLM codes count only when their quoted evidence was found in the protocol text.</li>
+    </ul>` + review +
+    `<p style="margin-top:10px"><b>Method:</b> ${esc(d.model)} · prompt ${esc(d.prompt_version)} ·
+     seed ${esc(d.seed)} · snapshot ${esc(d.snapshot_run_id)}</p>`;
+}
+
+function codeCell(study) {
+  const classic = (study.classic || []).map(r =>
+    `${esc(r.code)} <span class="via">${esc(r.via)}${r.match_type === "broad" ? "·broad" : ""}</span>`).join("<br>");
+  const llm = (study.llm || []).map(c => {
+    const t = `${esc(c.code)} <span class="via">${esc(c.confidence)}</span>`;
+    return c.found ? t : `<span class="unverified" title="quote not found">${t}</span>`;
+  }).join("<br>");
+  return [classic || "—", llm || "—"];
+}
+
+function renderFilters() {
+  const counts = {};
+  for (const s of EVAL.studies) counts[s.verdict] = (counts[s.verdict] || 0) + 1;
+  const opts = [["all", "All"], ...VERDICTS.map(([k, l]) => [k, `${l} (${counts[k] || 0})`])];
+  document.getElementById("filters").innerHTML = opts.map(([k, l]) =>
+    `<button data-f="${k}" class="${k === filter ? "on" : ""}">${l}</button>`).join("");
+  document.querySelectorAll("#filters button").forEach(b =>
+    b.onclick = () => { filter = b.dataset.f; renderFilters(); renderTable(); });
+}
+
+function renderTable() {
+  const rows = EVAL.studies.filter(s => filter === "all" || s.verdict === filter);
+  const tbody = document.getElementById("tbody");
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No studies for this filter.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(s => {
+    const [classic, llmc] = codeCell(s);
+    const ev = (s.llm || []).filter(c => c.found).map(c => `“${esc(clip(c.evidence, 220))}”`).join("<br>");
+    return `<tr>
+      <td><a href="https://clinicaltrials.gov/study/${esc(s.nct_id)}" target="_blank" rel="noopener"
+             style="color:#6366f1;text-decoration:none">${esc(s.nct_id)}</a><br>
+          <span class="via">${esc(clip(s.title, 60))}</span></td>
+      <td>${esc(clip((s.conditions || []).join("; "), 80))}</td>
+      <td class="codes">${classic}</td>
+      <td class="codes">${llmc}</td>
+      <td><span class="badge ${s.verdict}">${s.verdict.replace("_", " ")}</span></td>
+      <td class="evidence">${ev || (s.no_code_reason ? esc(clip(s.no_code_reason, 120)) : "—")}</td>
+      <td>${s.check ? esc(s.check) : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function loadAll() {
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Loading…';
+  try {
+    const d = await loadEval();
+    renderCards(d); renderSplit(d); renderConf(d); renderAdjudication(d);
+    renderFilters(); renderTable();
+    const generated = d.generated_at ? new Date(d.generated_at).toLocaleString() : "unknown";
+    document.getElementById("last-updated").textContent =
+      `Eval generated: ${generated} · loaded ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById("last-updated").textContent = `Error: ${err.message}`;
+    document.getElementById("tbody").innerHTML =
+      `<tr><td colspan="7" class="empty">${esc(err.message)}</td></tr>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "↻ Refresh";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadAll);
+</script>
+</body>
+</html>

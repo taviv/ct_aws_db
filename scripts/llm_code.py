@@ -19,6 +19,14 @@ LLM tier for condition coding (ROADMAP.md phase 1, steps 4-5), run from AWS Clou
   make llm-status
       Progress of the latest llm-code-cloud run: passes, studies still to code, tokens and estimated cost.
 
+  make llm-xeval MODEL=<id> [ARGS="--sample 300 --phase PHASE3 --seed 1 --review xeval_review.csv"]
+      Cross-evaluation experiment: a random sample of Phase-3 studies (healthy-volunteer and vaccine
+      trials excluded) is coded by the LLM and compared to the deterministic codes already in the
+      snapshot. Writes data/eval.json to the site bucket (dashboard "Coding eval" tab) and, with
+      --review, a CSV of the disagreements to hand-check. Reuses the eval cache, so reruns resume.
+  make llm-adjudicate FILE=<review csv>
+      Folds the hand labels (your_check: llm|classic|both|neither) into data/eval.json.
+
 MODEL is a Bedrock model or inference-profile id. --review FILE also writes every answer to a CSV for spot checks.
 --price-* (USD per million tokens) turn the token counts into a cost estimate.
 """
@@ -33,8 +41,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ct_pipeline import llm, llm_run  # noqa: E402
-from ct_pipeline.storage import LocalStore, S3Store  # noqa: E402
+from ct_pipeline import llm, llm_run, xeval  # noqa: E402
+from ct_pipeline.storage import LocalStore, S3Store, open_store  # noqa: E402
 
 EVAL_CACHE_KEY = "reference/llm_eval_cache.json"
 GOLD_SQL = """
@@ -82,6 +90,18 @@ def open_data(args):
     if args.data:
         return LocalStore(args.data)
     return S3Store(stack_outputs(args.stack)["DataBucketName"])
+
+
+def open_site(args):
+    """Site store for data/eval.json: --site, else <data>/../site locally, else the stack's SiteBucket."""
+    if args.site:
+        return open_store(args.site)
+    if args.data and not args.data.startswith("s3"):
+        site = Path(args.data).parent / "site"
+        return LocalStore(site) if site.exists() else None
+    if args.data:
+        return None
+    return S3Store(stack_outputs(args.stack)["SiteBucketName"])
 
 
 def prices(args) -> list:
@@ -249,6 +269,34 @@ def try_studies(con, coder, categories, args, phases) -> dict:
     return usage
 
 
+def xscorecard(h: dict, studies: list) -> None:
+    n = h["studies"]
+    if not n:
+        print("No studies in the sample.")
+        return
+    v = h["verdicts"]
+    print(f"\nCross-eval ({n:,} sampled studies; 'classic' = every non-LLM via)")
+    print(f"  coded by classic (any / exact)      {h['classic_coded'] / n:6.1%} / {h['classic_exact'] / n:.1%}")
+    print(f"  coded by LLM (verified / exact)     {h['llm_verified'] / n:6.1%} / {h['llm_exact'] / n:.1%}")
+    for verdict in xeval.VERDICTS:
+        print(f"  {verdict:28} {v[verdict]:4,}  ({v[verdict] / n:.1%})")
+    if h["recall_vs_exact"] is not None:
+        print(
+            f"  vs classic-exact as reference: recall {h['recall_vs_exact']:.1%}, "
+            f"precision {h['precision_vs_exact']:.1%}"
+        )
+    print(
+        f"  LLM exact yield where no exact classic code: {h['llm_yield_where_not_exact']:,} "
+        f"({h['llm_yield_broad_only']:,} had broad only, {h['llm_yield_uncoded']:,} uncoded)"
+    )
+    for conf, b in sorted(h["by_confidence"].items()):
+        print(
+            f"  confidence {conf:6}: {b['codes']:4,} codes, "
+            f"{b['match_any'] / b['codes']:.0%} match a classic code "
+            f"({b['match_exact'] / b['codes']:.0%} exact)"
+        )
+
+
 def scorecard(docs, entries, gold: dict, chapters: dict) -> None:
     n = len(entries)
     if not n:
@@ -279,7 +327,7 @@ def scorecard(docs, entries, gold: dict, chapters: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("eval", "code", "try", "cloud", "status"))
+    ap.add_argument("mode", choices=("eval", "code", "try", "cloud", "status", "xeval"))
     ap.add_argument("--model", help="Bedrock model or inference-profile id")
     ap.add_argument("--stack", default="ct-pipeline")
     ap.add_argument("--data", help="local data directory instead of the stack's data bucket")
@@ -298,6 +346,12 @@ def main() -> None:
     )
     ap.add_argument("--workers", type=int, default=llm.WORKERS)
     ap.add_argument("--review", help="write answers to this CSV")
+    ap.add_argument(
+        "--adjudicate",
+        metavar="FILE",
+        help="xeval: merge hand labels (your_check) from the review CSV into data/eval.json",
+    )
+    ap.add_argument("--site", help="xeval: site bucket/dir for data/eval.json (default: the stack's)")
     for name in ("in", "out", "cache-read", "cache-write"):
         ap.add_argument(f"--price-{name}", type=float, default=0.0)
     ap.add_argument("--no-publish", action="store_true", help="cloud: don't run the Reference function at the end")
@@ -305,8 +359,21 @@ def main() -> None:
     if args.mode == "status":
         print_status(sfn_client(), stack_outputs(args.stack)["LlmStateMachineArn"])
         return
-    if not args.model:
+    if not args.model and not (args.mode == "xeval" and args.adjudicate):
         sys.exit("Set MODEL to a Bedrock model or inference-profile id (see README: LLM tier)")
+    if args.mode == "xeval" and args.adjudicate:
+        site = open_site(args)
+        if site is None:
+            sys.exit("No site store for data/eval.json: pass --site or run against the stack")
+        payload = site.get_json(xeval.EVAL_KEY)
+        if payload is None:
+            sys.exit(f"No {xeval.EVAL_KEY} yet: run the xeval first")
+        payload = xeval.merge_adjudication(payload, args.adjudicate)
+        site.put_json(xeval.EVAL_KEY, payload)
+        print(f"Merged {payload['adjudicated']['reviewed']} hand labels into {xeval.EVAL_KEY}:")
+        a = payload["adjudicated"]
+        print(f"  llm right {a['llm']}, classic right {a['classic']}, both {a['both']}, neither {a['neither']}")
+        return
     unknown = {f.strip() for f in args.fields.split(",") if f.strip()} - set(llm.TEXT_FIELDS)
     if unknown:
         sys.exit(f"Unknown --fields {', '.join(sorted(unknown))}; choose from {', '.join(llm.TEXT_FIELDS)}")
@@ -332,6 +399,50 @@ def main() -> None:
             print(f"Snapshot {current['run_id']}", flush=True)
             usage = try_studies(con, coder, categories, args, phases or ["PHASE3"])
             print(f"Tokens: {usage_line(usage, prices(args))}")
+            return
+        if args.mode == "xeval":
+            phases = phases or ["PHASE3"]
+            pool = xeval.pool_counts(con, phases)
+            ids = xeval.sample_ids(con, phases, args.seed, args.sample)
+            classic = xeval.classic_codes(con, ids)
+            docs = llm.study_documents(con, ids)
+            print(
+                f"Snapshot {current['run_id']}: {len(docs):,} {'/'.join(phases)} studies "
+                f"(of {pool['eligible']:,} eligible; {pool['healthy']:,} healthy and {pool['vaccine']:,} "
+                f"vaccine studies excluded); coding with {args.model}",
+                flush=True,
+            )
+            entries, info = llm.code_studies(
+                coder,
+                store,
+                docs,
+                categories,
+                workers=args.workers,
+                progress=progress,
+                cache_key=EVAL_CACHE_KEY,
+            )
+            # all levels, so block codes (e.g. C00-D49) also map to a chapter for chapter_only verdicts
+            chapters = dict(con.execute(f"SELECT code, chapter FROM read_parquet('{icd}')").fetchall())
+            studies = xeval.compare(docs, classic, entries, chapters)
+            payload = xeval.eval_payload(current, phases, args.seed, args.model, studies, pool)
+            site = open_site(args)
+            if site is not None:
+                site.put_json(xeval.EVAL_KEY, payload)
+                print(f"\nWrote {xeval.EVAL_KEY} ({site.location(xeval.EVAL_KEY)})")
+            else:
+                print("\nPass --site to publish data/eval.json; nothing uploaded.")
+            xscorecard(payload["headline"], studies)
+            print(
+                f"\nCalls: {info['coded']:,} new, {info['cached']:,} cached, {info['failed']:,} failed",
+                info["errors"] or "",
+            )
+            print(f"Tokens: {usage_line(info['usage'], prices(args))}")
+            if args.review:
+                n = xeval.write_review(args.review, studies)
+                print(
+                    f"\nWrote {args.review}: {n} studies to hand-check "
+                    "(fill your_check: llm|classic|both|neither, then `make llm-adjudicate FILE=...`)"
+                )
             return
         if args.mode == "eval":
             gold = dict(con.execute(GOLD_SQL.format(phase=where), params + [args.seed, args.sample]).fetchall())
