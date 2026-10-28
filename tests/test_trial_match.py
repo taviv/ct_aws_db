@@ -108,6 +108,7 @@ def test_validate_match_cleans_fields():
     assert m["setting"] == "first_line"
     assert m["biomarkers"] == ["EGFR+", "PD-L1 >= 50%"]  # deduped
     assert m["confidence"] == "high"
+    assert trial_match.validate_match({"setting": "mixed"}, CATS)["setting"] == "mixed"
 
 
 def test_validate_match_defaults_and_bad_values():
