@@ -128,7 +128,7 @@ def study_documents(con, nct_ids=None) -> list:
         con.execute("CREATE OR REPLACE TEMP TABLE _llm_ids AS SELECT unnest(?::VARCHAR[]) AS nct_id", [list(nct_ids)])
         where = "WHERE s.nct_id IN (SELECT nct_id FROM _llm_ids)"
     rel = con.sql(f"""
-        SELECT s.nct_id, s.brief_title, s.official_title,
+        SELECT s.nct_id, s.brief_title, s.official_title, s.phase_group, s.overall_status,
                coalesce((SELECT list_sort(list_distinct(list(c.condition_name)))
                          FROM study_conditions c WHERE c.nct_id = s.nct_id), []) AS conditions,
                coalesce((SELECT list_sort(list_distinct(list(coalesce(i.intervention_type || ': ', '') || i.name)))
@@ -168,8 +168,8 @@ def render_study(doc: dict, fields=DEFAULT_FIELDS) -> str:
     return "\n\n".join(parts)
 
 
-def input_hash(text: str, model_id: str) -> str:
-    return hashlib.sha256(f"{PROMPT_VERSION}\n{model_id}\n{text}".encode()).hexdigest()[:16]
+def input_hash(text: str, model_id: str, version: str = PROMPT_VERSION) -> str:
+    return hashlib.sha256(f"{version}\n{model_id}\n{text}".encode()).hexdigest()[:16]
 
 
 def _norm(text: str) -> str:
@@ -276,11 +276,22 @@ def strong_codes(entry: dict) -> list:
 class BedrockCoder:
     """One Converse call per study, with the instructions + catalog as a cached system prompt and a forced tool call."""
 
-    def __init__(self, model_id: str, catalog: str, client=None, max_tokens: int = 1024):
+    def __init__(
+        self,
+        model_id: str,
+        catalog: str,
+        client=None,
+        max_tokens: int = 1024,
+        system: str = "",
+        tool: dict | None = None,
+        tool_name: str = "",
+    ):
         if not model_id:
             raise ValueError("Bedrock model id is empty")
         self.model_id = model_id
-        self.system = INSTRUCTIONS.format(max_codes=MAX_CODES, tool=TOOL_NAME, catalog=catalog)
+        self.system = system or INSTRUCTIONS.format(max_codes=MAX_CODES, tool=TOOL_NAME, catalog=catalog)
+        self.tool = tool or TOOL
+        self.tool_name = tool_name or TOOL_NAME
         self.max_tokens = max_tokens
         self._client = client
 
@@ -300,20 +311,33 @@ class BedrockCoder:
             modelId=self.model_id,
             system=[{"text": self.system}, {"cachePoint": {"type": "default"}}],
             messages=[{"role": "user", "content": [{"text": text}]}],
-            toolConfig={"tools": [TOOL], "toolChoice": {"tool": {"name": TOOL_NAME}}},
+            toolConfig={"tools": [self.tool], "toolChoice": {"tool": {"name": self.tool_name}}},
             inferenceConfig={"maxTokens": self.max_tokens, "temperature": 0},
         )
         usage = {k: v for k, v in (resp.get("usage") or {}).items() if isinstance(v, int)}
         for block in resp["output"]["message"]["content"]:
             if "toolUse" in block:
                 return block["toolUse"].get("input") or {}, usage
-        raise LlmError(f"No {TOOL_NAME} call in the response (stopReason={resp.get('stopReason')})")
+        raise LlmError(f"No {self.tool_name} call in the response (stopReason={resp.get('stopReason')})")
 
 
-def code_studies(coder, store, docs, categories, deadline=None, workers=WORKERS, progress=None, cache_key=CACHE_KEY):
+def code_studies(
+    coder,
+    store,
+    docs,
+    categories,
+    deadline=None,
+    workers=WORKERS,
+    progress=None,
+    cache_key=CACHE_KEY,
+    version=PROMPT_VERSION,
+    build_entry=None,
+):
     """
     Code `docs` (study_documents rows), reusing cached answers whose input hash matches. Stops starting new
     calls after `deadline` (time.monotonic()); the next run continues from the cache. Returns (entries, info).
+    `version`/`build_entry` let a different pass (e.g. trial_match) share this batch machinery: build_entry
+    is called as build_entry(answer, input_hash, text) and must return the dict stored per nct_id.
     """
     cache = (store.get_json(cache_key) or {}).get("entries", {}) if cache_key else {}
     usage, errors = {}, {}
@@ -321,7 +345,7 @@ def code_studies(coder, store, docs, categories, deadline=None, workers=WORKERS,
     jobs = []
     for doc in docs:
         text = render_study(doc)
-        h = input_hash(text, coder.model_id)
+        h = input_hash(text, coder.model_id, version)
         if cache.get(doc["nct_id"], {}).get("h") == h:
             stats["cached"] += 1
         else:
@@ -333,14 +357,17 @@ def code_studies(coder, store, docs, categories, deadline=None, workers=WORKERS,
             answer, used = coder.code(text)
         except Exception as e:  # noqa: BLE001 - one bad study must not stop the batch
             return nct_id, None, None, e
-        entry = {
-            "h": h,
-            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "model": coder.model_id,
-            "prompt": PROMPT_VERSION,
-            "codes": validate(answer, categories, text),
-            "no_code_reason": str(answer.get("no_code_reason") or "")[:500],
-        }
+        if build_entry is not None:
+            entry = build_entry(answer, h, text)
+        else:
+            entry = {
+                "h": h,
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "model": coder.model_id,
+                "prompt": version,
+                "codes": validate(answer, categories, text),
+                "no_code_reason": str(answer.get("no_code_reason") or "")[:500],
+            }
         return nct_id, entry, used, None
 
     def save():

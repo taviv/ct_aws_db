@@ -14,19 +14,19 @@ PHASE_FILTER = "AND nct_id IN (SELECT nct_id FROM studies WHERE list_contains(?:
 USAGE_KEYS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
 
 
-def open_snapshot(store, work: Path) -> tuple:
-    """Download the current snapshot's LLM input tables and the reference; returns (current, con, icd_path)."""
+def open_snapshot(store, work: Path, tables=TABLES) -> tuple:
+    """Download the current snapshot's `tables` and the reference; returns (current, con, icd_path)."""
     current = store.get_json(CURRENT_KEY)
     if current is None:
         raise llm.LlmError("No published snapshot yet (curated/CURRENT.json)")
     if "study_condition_codes" not in current["tables"]:
         raise llm.LlmError("The snapshot has no study_condition_codes yet: run `make reference` first")
-    for table in TABLES:
+    for table in tables:
         store.download(current["tables"][table], work / "snapshot" / table / "data.parquet")
     if download_reference(store, work / "reference") is None:
         raise llm.LlmError("No reference yet: run `make reference` first")
     con = connect(work)
-    attach_snapshot(con, work / "snapshot", list(TABLES))
+    attach_snapshot(con, work / "snapshot", list(tables))
     return current, con, work / "reference" / "icd10cm_codes" / "data.parquet"
 
 

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cancer Trials · ClinicalTrials Clinical Trials Dashboard</title>
+  <style>
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3e;
+      --text:     #e2e8f0;
+      --muted:    #8892a4;
+      --accent:   #6366f1;
+      --green:    #22c55e;
+      --yellow:   #eab308;
+      --red:      #ef4444;
+      --blue:     #3b82f6;
+      --purple:   #a855f7;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    #refresh-btn {
+      background: var(--accent); color: #fff; border: none;
+      padding: 8px 18px; border-radius: 6px; cursor: pointer;
+      font-size: 0.85rem; font-weight: 600; transition: opacity .2s;
+    }
+    #refresh-btn:hover { opacity: .85; }
+    #refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .spinner {
+      display: inline-block; width: 12px; height: 12px; margin-right: 6px;
+      border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    nav {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex; gap: 4px;
+    }
+    nav a {
+      padding: 10px 16px; font-size: 0.85rem; color: var(--muted);
+      text-decoration: none; border-bottom: 2px solid transparent;
+    }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    main { padding: 24px 32px; max-width: 1600px; margin: 0 auto; }
+    .intro {
+      font-size: 0.88rem; color: var(--muted); line-height: 1.5;
+      max-width: 1200px; margin-bottom: 20px;
+    }
+    .intro b { color: var(--text); }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 24px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; border-top: 3px solid var(--accent);
+    }
+    .card.green  { border-top-color: var(--green); }
+    .card.yellow { border-top-color: var(--yellow); }
+    .card.blue   { border-top-color: var(--blue); }
+    .card.purple { border-top-color: var(--purple); }
+    .card .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+    .card .value { font-size: 1.6rem; font-weight: 700; margin-top: 4px; }
+    .card .sub   { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+
+    .filters {
+      display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; align-items: center;
+    }
+    .filters input[type="search"], .filters select {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); padding: 7px 10px; font-size: 0.82rem;
+    }
+    .filters input[type="search"] { min-width: 260px; }
+    .filters select { min-width: 140px; }
+    .filters .count { font-size: 0.8rem; color: var(--muted); margin-left: auto; }
+
+    .table-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .table-box h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: .05em;
+      color: var(--muted); position: sticky; top: 0; background: var(--surface);
+    }
+    tr:hover td { background: rgba(99,102,241,.05); }
+    .nct { color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
+    .nct:hover { text-decoration: underline; }
+    .title { color: var(--muted); font-size: 0.75rem; margin-top: 3px; max-width: 320px; }
+    .chip {
+      display: inline-block; background: rgba(99,102,241,.15); border: 1px solid rgba(99,102,241,.4);
+      color: #c7d2fe; border-radius: 10px; padding: 1px 8px; margin: 0 4px 4px 0;
+      font-size: 0.72rem; white-space: nowrap;
+    }
+    .chip.bio { background: rgba(168,85,247,.14); border-color: rgba(168,85,247,.4); color: #e9d5ff; }
+    .chip.ex  { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.35); color: #fca5a5; }
+    .badge {
+      display: inline-block; border-radius: 10px; padding: 1px 8px; font-size: 0.72rem; white-space: nowrap;
+    }
+    .badge.neoadjuvant, .badge.adjuvant { background: rgba(59,130,246,.15); color: #93c5fd; }
+    .badge.first_line { background: rgba(34,197,94,.14); color: #86efac; }
+    .badge.relapsed_refractory { background: rgba(234,179,8,.14); color: #fde047; }
+    .badge.maintenance, .badge.supportive_care, .badge.prevention { background: rgba(168,85,247,.14); color: #d8b4fe; }
+    .badge.other { background: rgba(136,146,164,.15); color: var(--muted); }
+    .conf { font-size: 0.72rem; }
+    .conf.high { color: var(--green); } .conf.medium { color: var(--yellow); } .conf.low { color: var(--red); }
+    .sites { font-size: 0.75rem; color: var(--muted); }
+    .empty { text-align: center; color: var(--muted); padding: 32px !important; }
+    .muted { color: var(--muted); font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚗️ ClinicalTrials.gov — Clinical Trials Dashboard</h1>
+    <p id="last-updated">Loading…</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button id="refresh-btn" onclick="DATA = null; loadAll()">↻ Refresh</button>
+  </div>
+</header>
+
+<nav>
+  <a href="dashboard.html">Overview</a>
+  <a href="dashboard_duration.html">Study Duration</a>
+  <a href="dashboard_llm.html">LLM Coding</a>
+  <a href="dashboard_eval.html">Coding Eval</a>
+  <a href="dashboard_trials.html" class="active">Cancer Trials</a>
+</nav>
+
+<main>
+  <p class="intro">
+    Cancer trial finder: recruiting US-site interventional trials with a malignant-neoplasm ICD-10-CM
+    code (phase 2 and up). The matching fields — <b>disease, setting, prior therapy, biomarkers, key
+    exclusions, patient scope</b> — are extracted from the protocol text by an LLM pass; sites come from
+    the registry data. Always confirm eligibility on ClinicalTrials.gov and with the sponsor.
+  </p>
+
+  <div class="cards">
+    <div class="card"><div class="label">Trials listed</div><div class="value" id="c-n">—</div><div class="sub" id="c-n-sub"></div></div>
+    <div class="card blue"><div class="label">Phase 3 / 2+3</div><div class="value" id="c-p3">—</div><div class="sub" id="c-p3-sub"></div></div>
+    <div class="card purple"><div class="label">With biomarkers</div><div class="value" id="c-bio">—</div><div class="sub">require or stratify</div></div>
+    <div class="card green"><div class="label">First line</div><div class="value" id="c-1l">—</div><div class="sub" id="c-1l-sub"></div></div>
+    <div class="card yellow"><div class="label">US states covered</div><div class="value" id="c-st">—</div><div class="sub">at least one site</div></div>
+  </div>
+
+  <div class="table-box">
+    <h2>Recruiting trials</h2>
+    <div class="filters">
+      <input id="f-search" type="search" placeholder="Search title, disease, condition, biomarker…" oninput="renderTable()" />
+      <select id="f-phase" onchange="renderTable()"><option value="">All phases</option></select>
+      <select id="f-setting" onchange="renderTable()"><option value="">All settings</option></select>
+      <select id="f-state" onchange="renderTable()"><option value="">All states</option></select>
+      <select id="f-conf" onchange="renderTable()"><option value="">Any confidence</option>
+        <option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select>
+      <span class="count" id="f-count"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Study</th><th>Disease</th><th>Setting</th><th>Prior therapy</th>
+        <th>Biomarkers</th><th>Key exclusions</th><th>Scope</th><th>US sites</th><th>Conf.</th>
+      </tr></thead>
+      <tbody id="tbody"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const DATA_URL = "data/trials.json";
+let DATA = null;
+
+function fmt(n) { return n == null ? "—" : Number(n).toLocaleString(); }
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function clip(s, n) { s = s || ""; return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+function settingLabel(s) { return (s || "other").replace(/_/g, " "); }
+
+async function loadData() {
+  if (DATA) return DATA;
+  const res = await fetch(DATA_URL, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} — no trial-match run yet (run make trial-match)`);
+  DATA = await res.json();
+  return DATA;
+}
+
+function renderCards(d) {
+  const t = d.trials || [];
+  document.getElementById("c-n").textContent = fmt(d.count);
+  document.getElementById("c-n-sub").textContent = `snapshot ${d.run_id || "?"} · prompt ${d.prompt || "?"}`;
+  const p3 = t.filter(x => x.phase === "PHASE3" || x.phase === "PHASE2/PHASE3").length;
+  document.getElementById("c-p3").textContent = fmt(p3);
+  const p2 = t.filter(x => x.phase === "PHASE2").length;
+  document.getElementById("c-p3-sub").textContent = `${fmt(p2)} phase 2`;
+  document.getElementById("c-bio").textContent = fmt(t.filter(x => (x.biomarkers || []).length).length);
+  const fl = t.filter(x => x.setting === "first_line").length;
+  document.getElementById("c-1l").textContent = fmt(fl);
+  document.getElementById("c-1l-sub").textContent =
+    `${fmt(t.filter(x => x.setting === "relapsed_refractory").length)} relapsed/refractory`;
+  const states = new Set();
+  for (const x of t) for (const s of x.states || []) states.add(s);
+  document.getElementById("c-st").textContent = fmt(states.size);
+}
+
+function fillSelects(d) {
+  const t = d.trials || [];
+  const phases = [...new Set(t.map(x => x.phase).filter(Boolean))].sort();
+  const settings = [...new Set(t.map(x => x.setting).filter(Boolean))].sort();
+  const states = [...new Set(t.flatMap(x => x.states || []))].sort();
+  const add = (id, values, label) => {
+    const sel = document.getElementById(id);
+    for (const v of values) sel.add(new Option(label ? label(v) : v, v));
+  };
+  add("f-phase", phases);
+  add("f-setting", settings, settingLabel);
+  add("f-state", states);
+}
+
+function matches(t, q) {
+  const hay = [t.nct_id, t.title, t.disease, t.icd10, t.icd10_label,
+               ...(t.conditions || []), ...(t.biomarkers || []),
+               ...(t.interventions || [])].join(" ").toLowerCase();
+  return q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+
+function renderTable() {
+  const q = document.getElementById("f-search").value.trim();
+  const phase = document.getElementById("f-phase").value;
+  const setting = document.getElementById("f-setting").value;
+  const state = document.getElementById("f-state").value;
+  const conf = document.getElementById("f-conf").value;
+  const rows = (DATA.trials || []).filter(t =>
+    (!q || matches(t, q)) &&
+    (!phase || t.phase === phase) &&
+    (!setting || t.setting === setting) &&
+    (!state || (t.states || []).includes(state)) &&
+    (!conf || t.confidence === conf));
+  document.getElementById("f-count").textContent = `${fmt(rows.length)} of ${fmt(DATA.count)}`;
+  const tbody = document.getElementById("tbody");
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No trials match these filters.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(t => `<tr>
+    <td><a class="nct" href="https://clinicaltrials.gov/study/${esc(t.nct_id)}" target="_blank" rel="noopener">${esc(t.nct_id)}</a>
+        <div class="title">${esc(clip(t.title, 110))}</div>
+        <span class="muted">${esc(t.phase)}</span></td>
+    <td><b>${esc(clip(t.disease, 90)) || "—"}</b>
+        <div class="muted">${esc(t.icd10)}${t.icd10_label ? " " + esc(clip(t.icd10_label, 50)) : ""}</div></td>
+    <td><span class="badge ${esc(t.setting)}">${esc(settingLabel(t.setting))}</span></td>
+    <td class="muted">${esc(clip(t.prior_therapy, 100)) || "—"}</td>
+    <td>${(t.biomarkers || []).map(b => `<span class="chip bio">${esc(b)}</span>`).join("") || "—"}</td>
+    <td>${(t.key_exclusions || []).map(b => `<span class="chip ex">${esc(b)}</span>`).join("") || "—"}</td>
+    <td class="muted">${esc(clip(t.patient_scope, 60)) || "—"}</td>
+    <td class="sites">${fmt(t.sites)} sites<div class="muted">${esc(clip((t.states || []).join(", "), 80))}</div></td>
+    <td><span class="conf ${esc(t.confidence)}">${esc(t.confidence)}</span></td>
+  </tr>`).join("");
+}
+
+async function loadAll() {
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Loading…';
+  try {
+    const d = await loadData();
+    renderCards(d); fillSelects(d); renderTable();
+    const generated = d.generated_at ? new Date(d.generated_at).toLocaleString() : "unknown";
+    document.getElementById("last-updated").textContent =
+      `Trials generated: ${generated} · model ${d.model || "?"} · loaded ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById("last-updated").textContent = `Error: ${err.message}`;
+    document.getElementById("tbody").innerHTML =
+      `<tr><td colspan="9" class="empty">${esc(err.message)}</td></tr>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "↻ Refresh";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadAll);
+</script>
+</body>
+</html>
