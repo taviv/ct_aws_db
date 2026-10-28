@@ -8,6 +8,10 @@ LLM tier for condition coding (ROADMAP.md phase 1, steps 4-5), run from AWS Clou
   make llm-code MODEL=<id> [ARGS="--phase PHASE3,PHASE2/PHASE3 --limit 1000"]
       Codes studies with no exact ICD-10-CM code into reference/llm_cache.json (resumable: rerun to continue).
       `make reference` then publishes them in study_condition_codes as via='llm'.
+  make llm-retry MODEL=<id> [ARGS="--phase PHASE3"]
+      Same as llm-code --retry-unverified: first re-validates every cached answer's evidence under the
+      current matching rules (rescues codes a stricter gate rejected; free), then re-codes only the
+      studies still lacking a verified high-confidence category.
 
   make llm-try MODEL=<id> [ARGS="--phase PHASE3 --limit 10 --fields brief_summary"]
       Small manual test: codes a few ambiguous studies (no exact code, vague condition name like "Solid Tumors") from
@@ -345,6 +349,12 @@ def main() -> None:
         help=f"try: comma-separated text fields to send, from {', '.join(llm.TEXT_FIELDS)}",
     )
     ap.add_argument("--workers", type=int, default=llm.WORKERS)
+    ap.add_argument(
+        "--retry-unverified",
+        action="store_true",
+        help="code: re-validate cached answers under the current evidence rules, then re-code only "
+        "studies still lacking a verified high-confidence category",
+    )
     ap.add_argument("--review", help="write answers to this CSV")
     ap.add_argument(
         "--adjudicate",
@@ -463,6 +473,31 @@ def main() -> None:
             )
             ids = ids[: args.limit] if args.limit else ids
             docs = llm.study_documents(con, ids)
+            if args.retry_unverified:
+                cache = (store.get_json(llm.CACHE_KEY) or {}).get("entries", {})
+                retry, rescued, revalidated = [], 0, 0
+                for d in docs:
+                    e = cache.get(d["nct_id"])
+                    if not (e or {}).get("codes"):
+                        retry.append(d)
+                        continue
+                    revalidated += 1
+                    if llm.revalidate_entry(e, llm.render_study(d), categories):
+                        rescued += 1
+                    if not llm.strong_codes(e):
+                        retry.append(d)
+                if rescued:
+                    store.put_json(
+                        llm.CACHE_KEY,
+                        {"updated_at": datetime.now(timezone.utc).isoformat(), "entries": cache},
+                    )
+                print(
+                    f"Re-validated {revalidated:,} cached answers under the current evidence rules "
+                    f"({rescued:,} changed); {len(retry):,} studies still lack a verified "
+                    "high-confidence code",
+                    flush=True,
+                )
+                docs = retry
             print(f"Coding {len(docs):,} with {args.model} (cached answers are reused)", flush=True)
             entries, info = llm.code_studies(coder, store, docs, categories, workers=args.workers, progress=progress)
             coded = [e for e in entries.values() if verified(e)]
