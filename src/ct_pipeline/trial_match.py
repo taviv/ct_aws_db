@@ -1,8 +1,9 @@
 """
-Trial-match pass (cancer trial finder PoV): structured patient-matching fields for recruiting US cancer trials.
+Trial-match pass (cancer trial finder PoV): structured patient-matching fields for recruiting cancer
+trials in the US, Canada, Australia and the UK.
 
-A second LLM pass next to condition coding (`llm.py`): for recruiting US-site interventional trials with a
-malignant-neoplasm code (phase 2 and up by default), the model reads the protocol (titles, conditions,
+A second LLM pass next to condition coding (`llm.py`): for recruiting interventional trials with a
+malignant-neoplasm code and a site in COUNTRIES (phase 2+ by default), the model reads the protocol (titles, conditions,
 interventions, summary, eligibility criteria) and reports the fields a doctor needs to tell whether a
 patient might be eligible — disease, treatment setting, prior therapy, biomarkers, key exclusions and
 patient scope — plus the ICD-10-CM category it would assign, as a cross-check against the coding tier.
@@ -24,6 +25,7 @@ CACHE_KEY = "reference/trial_match_cache.json"
 TRIALS_KEY = "data/trials.json"
 TOOL_NAME = "record_trial_match"
 DEFAULT_PHASES = ("PHASE2", "PHASE2/3", "PHASE3")
+COUNTRIES = ("United States", "Canada", "Australia", "United Kingdom")
 SETTINGS = (
     "neoadjuvant",
     "adjuvant",
@@ -41,14 +43,14 @@ MAX_STR = 240
 MAX_FIELD_STR = 120
 STATUSES = ("RECRUITING", "ENROLLING_BY_INVITATION")
 
-# recruiting interventional trials with a US site and a malignant-neoplasm (C*) ICD-10-CM code
+# recruiting interventional trials with a site in COUNTRIES and a malignant-neoplasm (C*) ICD-10-CM code
 TARGETS_SQL = """
     SELECT s.nct_id FROM studies s
     WHERE s.study_type = 'INTERVENTIONAL'
       AND s.overall_status IN ('RECRUITING', 'ENROLLING_BY_INVITATION')
       AND list_contains(?::VARCHAR[], s.phase_group)
       AND EXISTS (SELECT 1 FROM study_locations l
-                  WHERE l.nct_id = s.nct_id AND l.country = 'United States')
+                  WHERE l.nct_id = s.nct_id AND list_contains(?::VARCHAR[], l.country))
       AND EXISTS (SELECT 1 FROM study_condition_codes c
                   WHERE c.nct_id = s.nct_id AND c.code_system = 'ICD10CM' AND c.code LIKE 'C%')
     ORDER BY s.nct_id
@@ -56,11 +58,12 @@ TARGETS_SQL = """
 
 LOCATIONS_SQL = """
     SELECT nct_id,
+           list_sort(list_distinct(list(country))) AS countries,
            list_sort(list_distinct(list(state)))   AS states,
            list_sort(list_distinct(list(city)))    AS cities,
            count(*)                                AS sites
     FROM study_locations
-    WHERE country = 'United States' AND nct_id IN (SELECT unnest(?::VARCHAR[]))
+    WHERE list_contains(?::VARCHAR[], country) AND nct_id IN (SELECT unnest(?::VARCHAR[]))
     GROUP BY 1
 """
 
@@ -176,16 +179,19 @@ def build_entry(categories: dict, model: str):
     return _entry
 
 
-def targets(con, phases) -> list:
-    """NCT IDs of recruiting US-site interventional trials with a malignant-neoplasm code, in `phases`."""
-    return [r[0] for r in con.execute(TARGETS_SQL, [list(phases)]).fetchall()]
+def targets(con, phases, countries=COUNTRIES) -> list:
+    """NCT IDs of recruiting interventional trials with a malignant-neoplasm code and a site in `countries`."""
+    return [r[0] for r in con.execute(TARGETS_SQL, [list(phases), list(countries)]).fetchall()]
 
 
-def us_locations(con, nct_ids) -> dict:
-    """{nct_id: {states, cities, sites}} for US locations (the deterministic part of the finder)."""
+def locations(con, nct_ids, countries=COUNTRIES) -> dict:
+    """{nct_id: {countries, states, cities, sites}} for sites in `countries` (the deterministic part)."""
     out = {}
-    for nct_id, states, cities, sites in con.execute(LOCATIONS_SQL, [list(nct_ids)]).fetchall():
+    for nct_id, countries_, states, cities, sites in con.execute(
+        LOCATIONS_SQL, [list(countries), list(nct_ids)]
+    ).fetchall():
         out[nct_id] = {
+            "countries": [c for c in countries_ if c],
             "states": [s for s in states if s],
             "cities": [c for c in cities if c],
             "sites": sites,
@@ -220,6 +226,7 @@ def trials_payload(current: dict, docs: list, entries: dict, locs: dict, categor
                 "confidence": m.get("confidence", ""),
                 "conditions": d.get("conditions") or [],
                 "interventions": d.get("interventions") or [],
+                "countries": loc.get("countries", []),
                 "states": loc.get("states", []),
                 "cities": loc.get("cities", []),
                 "sites": loc.get("sites", 0),

@@ -90,8 +90,8 @@ llm-adjudicate:
 	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
 	.verify-venv/bin/python scripts/llm_code.py xeval --stack $(STACK) --adjudicate "$(FILE)"
 
-## Cancer trial finder PoV: extract patient-matching fields for recruiting US cancer
-## trials (phase 2+) and publish data/trials.json for the "Cancer Trials" tab
+## Cancer trial finder PoV: extract patient-matching fields for recruiting cancer
+## trials with a US/CA/AU/UK site (phase 2+) and publish data/trials.json for the "Cancer Trials" tab
 trial-match:
 	@test -n "$(MODEL)" || (echo "Set MODEL=<Bedrock model or inference-profile id>" && exit 1)
 	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
