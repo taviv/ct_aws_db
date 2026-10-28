@@ -1,6 +1,7 @@
 import duckdb
+import pytest
 
-from ct_pipeline import llm, trial_match
+from ct_pipeline import llm, llm_run, trial_match
 
 
 def _con():
@@ -61,6 +62,14 @@ def test_targets_filters():
     )
     ids = trial_match.targets(con, ("PHASE2", "PHASE2/PHASE3", "PHASE3"))
     assert ids == ["NCT1", "NCT7", "NCT8"]
+
+
+def test_parse_phases_accepts_shorthand():
+    con = _con()
+    con.execute("INSERT INTO studies VALUES ('NCT1', 't', 'INTERVENTIONAL', 'RECRUITING', 'PHASE2/PHASE3')")
+    assert llm_run.parse_phases(con, "phase2/3") == ["PHASE2/PHASE3"]
+    with pytest.raises(llm.LlmError):
+        llm_run.parse_phases(con, "PHASE4")
 
 
 def test_us_locations_groups_states_and_cities():
