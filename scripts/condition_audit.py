@@ -52,7 +52,7 @@ def code_flags(code: str, via: str, match_type: str, source: str) -> list:
         flags.append("ancestor_via")
     if (source or "").startswith("umls") and match_type == "broad":
         flags.append("umls_broad")
-    if code in llm.CATCH_ALL:
+    if code[:3] in llm.CATCH_ALL:
         flags.append("catch_all")
     return flags
 
