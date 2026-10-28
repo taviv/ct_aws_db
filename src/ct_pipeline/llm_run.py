@@ -30,11 +30,15 @@ def open_snapshot(store, work: Path, tables=TABLES) -> tuple:
     return current, con, work / "reference" / "icd10cm_codes" / "data.parquet"
 
 
+# natural shorthands people type for the combined-phase values
+PHASE_ALIASES = {"PHASE1/2": "PHASE1/PHASE2", "PHASE2/3": "PHASE2/PHASE3"}
+
+
 def parse_phases(con, phases) -> list:
     """phase_group values from a list or a 'PHASE3,PHASE2/PHASE3' string, upper-cased; LlmError if unknown."""
     if isinstance(phases, str):
         phases = phases.split(",")
-    phases = [p.strip().upper() for p in phases or [] if p.strip()]
+    phases = [PHASE_ALIASES.get(p, p) for p in (p.strip().upper() for p in phases or []) if p]
     known = {r[0] for r in con.execute("SELECT DISTINCT phase_group FROM studies").fetchall()}
     unknown = sorted(set(phases) - known)
     if unknown:
