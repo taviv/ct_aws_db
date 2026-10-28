@@ -151,8 +151,15 @@ def test_llm_code_rows_keep_verified_evidence_only(catalog):
 
 def test_targets_and_documents():
     con = duckdb.connect()
-    con.execute("CREATE TABLE studies (nct_id VARCHAR, brief_title VARCHAR, official_title VARCHAR)")
-    con.execute("INSERT INTO studies VALUES ('NCT1','a',NULL), ('NCT2','b',NULL), ('NCT3','c',NULL), ('NCT4','d',NULL)")
+    con.execute(
+        "CREATE TABLE studies (nct_id VARCHAR, brief_title VARCHAR, official_title VARCHAR,"
+        " phase_group VARCHAR, overall_status VARCHAR)"
+    )
+    con.execute(
+        "INSERT INTO studies VALUES ('NCT1','a',NULL,'PHASE3','RECRUITING'),"
+        " ('NCT2','b',NULL,'PHASE3','RECRUITING'), ('NCT3','c',NULL,'PHASE3','COMPLETED'),"
+        " ('NCT4','d',NULL,'PHASE3','RECRUITING')"
+    )
     con.execute(
         "CREATE TABLE study_text (nct_id VARCHAR, brief_summary VARCHAR, detailed_description VARCHAR,"
         " eligibility_criteria VARCHAR)"
