@@ -19,7 +19,7 @@ from . import llm
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 CACHE_KEY = "reference/trial_match_cache.json"
 TRIALS_KEY = "data/trials.json"
 TOOL_NAME = "record_trial_match"
@@ -32,6 +32,7 @@ SETTINGS = (
     "maintenance",
     "supportive_care",
     "prevention",
+    "mixed",
     "other",
 )
 MAX_BIOMARKERS = 8
@@ -71,7 +72,8 @@ Report these fields from the protocol text:
   (e.g. "metastatic NSCLC", "relapsed/refractory DLBCL", "high-risk early breast cancer").
 - icd10: the ICD-10-CM category code from the catalog that best names the disease; "" if none fits.
 - setting: exactly one of: neoadjuvant, adjuvant, first_line (untreated advanced/metastatic disease),
-  relapsed_refractory, maintenance, supportive_care, prevention, other.
+  relapsed_refractory, maintenance, supportive_care, prevention, mixed (trial takes both untreated
+  and pretreated patients), other.
 - prior_therapy: prior treatment patients must or must not have had, in a few words
   (e.g. ">=1 prior platinum line; no prior anti-PD-1", "treatment-naive"). "" if the text says nothing.
 - biomarkers: biomarkers, mutations or expression levels that are required or used for
@@ -99,7 +101,11 @@ TOOL = {
                 "properties": {
                     "disease": {"type": "string", "description": "cancer type, site/histology/stage"},
                     "icd10": {"type": "string", "description": "best ICD-10-CM category from the catalog, or ''"},
-                    "setting": {"type": "string", "enum": list(SETTINGS)},
+                    "setting": {
+                        "type": "string",
+                        "enum": list(SETTINGS),
+                        "description": "mixed: enrolls both untreated and pretreated patients",
+                    },
                     "prior_therapy": {"type": "string", "description": "required/excluded prior treatment"},
                     "biomarkers": {"type": "array", "items": {"type": "string"}},
                     "key_exclusions": {"type": "array", "items": {"type": "string"}},
