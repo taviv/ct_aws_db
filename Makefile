@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -55,6 +55,12 @@ umls-coverage:
 	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
 	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
 	.verify-venv/bin/python scripts/umls_coverage.py --stack $(STACK)
+
+## Suspicion-ranked CSV of shaky deterministic condition codes for hand review
+condition-audit:
+	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
+	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
+	.verify-venv/bin/python scripts/condition_audit.py --stack $(STACK) $(ARGS)
 
 ## Condition-coding coverage per phase for the published snapshot (read-only)
 condition-stats:
