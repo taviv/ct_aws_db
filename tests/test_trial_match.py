@@ -45,22 +45,29 @@ def test_targets_filters():
             _study("NCT2", status="COMPLETED"),  # not recruiting
             _study("NCT3", phase="PHASE1"),  # wrong phase
             _study("NCT4", stype="OBSERVATIONAL"),  # not interventional
-            _study("NCT5"),  # no US site
+            _study("NCT5"),  # site outside the country list
             _study("NCT6"),  # no cancer code
             _study("NCT7", phase="PHASE2/PHASE3"),  # keep
             _study("NCT8", status="ENROLLING_BY_INVITATION"),  # keep
+            _study("NCT9"),  # keep — Canada site
         ],
     )
-    for nct in ("NCT1", "NCT2", "NCT3", "NCT4", "NCT5", "NCT7", "NCT8"):
+    for nct in ("NCT1", "NCT2", "NCT3", "NCT4", "NCT5", "NCT7", "NCT8", "NCT9"):
         con.execute("INSERT INTO study_condition_codes VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _code(nct, "C50"))
     con.execute("INSERT INTO study_condition_codes VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _code("NCT6", "E11"))
     for nct in ("NCT1", "NCT2", "NCT3", "NCT4", "NCT6", "NCT7", "NCT8"):
         con.execute("INSERT INTO study_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", _loc(nct))
     con.execute(
         "INSERT INTO study_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        _loc("NCT5", country="Canada", state="ON", city="Toronto"),
+        _loc("NCT5", country="France", state="", city="Paris"),
+    )
+    con.execute(
+        "INSERT INTO study_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        _loc("NCT9", country="Canada", state="ON", city="Toronto"),
     )
     ids = trial_match.targets(con, ("PHASE2", "PHASE2/PHASE3", "PHASE3"))
+    assert ids == ["NCT1", "NCT7", "NCT8", "NCT9"]
+    ids = trial_match.targets(con, ("PHASE2", "PHASE2/PHASE3", "PHASE3"), ("United States",))
     assert ids == ["NCT1", "NCT7", "NCT8"]
 
 
@@ -72,7 +79,7 @@ def test_parse_phases_accepts_shorthand():
         llm_run.parse_phases(con, "PHASE4")
 
 
-def test_us_locations_groups_states_and_cities():
+def test_locations_groups_countries_states_and_cities():
     con = _con()
     con.execute("INSERT INTO study_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", _loc("NCT1", state="CA"))
     con.execute(
@@ -83,8 +90,12 @@ def test_us_locations_groups_states_and_cities():
         "INSERT INTO study_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         _loc("NCT1", country="Canada", state="ON", city="Toronto"),
     )
-    locs = trial_match.us_locations(con, ["NCT1"])
-    assert locs["NCT1"]["states"] == ["CA", "NY"]
+    locs = trial_match.locations(con, ["NCT1"])
+    assert locs["NCT1"]["countries"] == ["Canada", "United States"]
+    assert locs["NCT1"]["states"] == ["CA", "NY", "ON"]
+    assert locs["NCT1"]["sites"] == 3
+    assert "Toronto" in locs["NCT1"]["cities"]
+    locs = trial_match.locations(con, ["NCT1"], ("United States",))
     assert locs["NCT1"]["sites"] == 2
     assert "Toronto" not in locs["NCT1"]["cities"]
 
@@ -159,13 +170,13 @@ def test_trials_payload_shape():
             "text",
         )
     }
-    locs = {"NCT1": {"states": ["CA"], "cities": ["LA"], "sites": 1}}
+    locs = {"NCT1": {"countries": ["United States"], "states": ["CA"], "cities": ["LA"], "sites": 1}}
     payload = trial_match.trials_payload({"run_id": "r1"}, docs, entries, locs, CATS, "m")
     assert payload["count"] == 1 and payload["run_id"] == "r1"
     t = payload["trials"][0]
     assert t["nct_id"] == "NCT1" and t["phase"] == "PHASE2" and t["status"] == "RECRUITING"
     assert t["icd10"] == "C34" and t["icd10_label"] == CATS["C34"]
-    assert t["states"] == ["CA"] and t["sites"] == 1
+    assert t["states"] == ["CA"] and t["sites"] == 1 and t["countries"] == ["United States"]
     # unanswered studies are skipped
     payload = trial_match.trials_payload({"run_id": "r1"}, docs, {}, locs, CATS, "m")
     assert payload["count"] == 0

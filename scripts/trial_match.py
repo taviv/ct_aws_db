@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Cancer trial finder PoV: extract patient-matching fields for recruiting US cancer trials.
+Cancer trial finder PoV: extract patient-matching fields for recruiting cancer trials (US/CA/AU/UK).
 
   make trial-match MODEL=<id> [ARGS="--limit 10 --review trials_review.csv"]
-      For recruiting US-site interventional trials with a malignant-neoplasm code (phase 2+),
+      For recruiting interventional trials with a malignant-neoplasm code and a site in the US,
+      Canada, Australia or the UK (phase 2+),
       one Bedrock call per study extracts disease/setting/prior-therapy/biomarkers/exclusions/
       patient-scope into reference/trial_match_cache.json (resumable: rerun to continue), then
       publishes data/trials.json to the site bucket for the dashboard "Cancer Trials" tab.
 
-  Options: --phase PHASE2,PHASE2/PHASE3,PHASE3 (default); --ids NCT1,NCT2; --limit N;
+  Options: --phase PHASE2,PHASE2/PHASE3,PHASE3 (default); --countries "United States,Canada";
   --review FILE (hand-check CSV, fill your_check); --site DIR (site store for data/trials.json);
   --no-publish; --price-* (USD per million tokens) for a cost estimate.
 """
@@ -75,6 +76,11 @@ def main() -> None:
         help="comma-separated phase_group values (default phase 2 and up)",
     )
     ap.add_argument("--ids", help="comma-separated NCT IDs instead of the target query")
+    ap.add_argument(
+        "--countries",
+        default=",".join(trial_match.COUNTRIES),
+        help="comma-separated site countries (default US, Canada, Australia, UK)",
+    )
     ap.add_argument("--limit", type=int, help="at most this many studies (in NCT order)")
     ap.add_argument("--workers", type=int, default=llm.WORKERS)
     ap.add_argument("--review", help="write extracted fields to this CSV for hand-checking")
@@ -94,21 +100,23 @@ def main() -> None:
         catalog, categories = llm.category_catalog(con, icd)
         coder = trial_match.make_coder(args.model, catalog)
 
+        countries = [c.strip() for c in args.countries.split(",") if c.strip()]
         if args.ids:
             ids = sorted({i.strip().upper() for i in args.ids.split(",") if i.strip()})
         else:
-            ids = trial_match.targets(con, phases)
+            ids = trial_match.targets(con, phases, countries)
         if args.limit:
             ids = ids[: args.limit]
         print(
-            f"Snapshot {current['run_id']}: {len(ids):,} recruiting US cancer trials ({', '.join(phases)}) to extract",
+            f"Snapshot {current['run_id']}: {len(ids):,} recruiting cancer trials "
+            f"({', '.join(phases)}; sites in {', '.join(countries)}) to extract",
             flush=True,
         )
         docs = llm.study_documents(con, ids)
         missing = sorted(set(ids) - {d["nct_id"] for d in docs})
         if missing:
             print("Not in the snapshot:", ", ".join(missing))
-        locs = trial_match.us_locations(con, ids)
+        locs = trial_match.locations(con, ids, countries)
         con.close()
 
         progress = lambda d, n: print(f"  {d:,}/{n:,}", flush=True)  # noqa: E731
