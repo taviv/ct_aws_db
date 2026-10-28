@@ -191,6 +191,38 @@ def test_evidence_fragments_may_be_joined_with_semicolons():
     assert not llm.evidence_found("Adenocarcinoma; Lung Neoplasm", text)
 
 
+def test_evidence_tolerates_small_word_drift_in_long_quotes():
+    text = (
+        "Subjects with a diagnosis of IIM other than DM include polymyositis, autoimmune necrotizing "
+        "myopathy, myositis in association with another connective tissue disease and juvenile myositis "
+        "subjects above the age of 18"
+    )
+    assert llm.evidence_found("Subjects with a diagnosis of IIM include PM, autoimmune necrotizing myopathy", text)
+    assert not llm.evidence_found("Subjects with a diagnosis of rheumatoid arthritis and lupus nephritis", text)
+    # short fragments stay strict: every word must be present in order
+    assert not llm.evidence_found("IIM include PM", text)
+
+
+def test_evidence_label_fragments_are_skipped():
+    # the model pasted the catalog description first, then a real quote: the label fragment is skipped
+    text = "Adult female patients with metastatic breast cancer confirmed by pathology or imaging"
+    assert llm.evidence_found(
+        "Malignant neoplasm of breast; metastatic breast cancer confirmed by pathology",
+        text,
+        label="Malignant neoplasm of breast",
+    )
+    # label-only evidence is still unverified: nothing grounds the code in the protocol
+    assert not llm.evidence_found(
+        "Malignant neoplasm of breast", "unrelated text", label="Malignant neoplasm of breast"
+    )
+    # a label fragment does not rescue other fragments that do not match
+    assert not llm.evidence_found(
+        "Malignant neoplasm of breast; small cell lung carcinoma",
+        text,
+        label="Malignant neoplasm of breast",
+    )
+
+
 def test_prompt_rules(catalog):
     system = llm.BedrockCoder("m", catalog[0], client=FakeBedrock(LUNG)).system
     assert "junction cancer is C16" in system and "never\nnext to site categories" in system

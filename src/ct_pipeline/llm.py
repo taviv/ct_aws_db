@@ -14,12 +14,13 @@ import json
 import logging
 import re
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 8000
@@ -47,12 +48,17 @@ patients with a disease, code that symptom or complication first; add the diseas
 Use the protocol text to resolve vague condition names: for "advanced solid tumors", code the specific cancers
 the eligibility criteria name; use C80 only if any solid tumor is eligible or no primary site is named, never
 next to site categories just because a generic term like "Advanced Cancer" is listed. Use the most specific
-category the text supports, at most {max_codes} categories, the main condition first.
+category the text supports, at most {max_codes} categories, the main condition first — prefer a few specific
+categories over a long list of marginal ones.
+Before finalizing, re-check confusable sibling categories: hemophilia A is D66 and hemophilia B is D67;
+myeloid leukemia is C92 and lymphoid C91 (promyelocytic leukemia is myeloid); acute hepatitis is B17 and
+chronic hepatitis B18.
 Gastroesophageal (esophagogastric) junction cancer is C16 (cardia), not C15.
 Use the secondary-site categories C77-C79 only when the study targets the metastases themselves (e.g. brain
 metastases); "metastatic pancreatic cancer" is C25 alone.
 For every category, quote verbatim the protocol text that supports it (copy it exactly; use "..." between
-non-adjacent fragments).
+non-adjacent fragments). Quote only words that appear in the protocol text: never copy a category
+description from the catalog, and never write meta-commentary like "study enrolls" or "participants are".
 Confidence: high = the condition is named explicitly in the text; medium = inferred from indirect wording
 (e.g. histology, biomarker or the drug's indication); low = a generic fallback such as C80 or C96 from terms like
 "advanced malignancies".
@@ -172,11 +178,54 @@ def _norm(text: str) -> str:
     return re.sub(r"[\W_]+", "", text).lower()
 
 
-def evidence_found(evidence: str, text: str) -> bool:
+def _tokens(text: str) -> list:
+    """Word tokens after the same cleanup _norm applies to list markers."""
+    text = re.sub(r"(?m)^\s*(?:[-*•]|\(?\d{1,2}[.)])\s+", " ", text)
+    return re.sub(r"[\W_]+", " ", text).lower().split()
+
+
+def _near_match(fragment: str, text_words: list) -> bool:
+    """Short fragments (<=10 words) must appear as an ordered word sequence. Longer quotes tolerate
+    ~1-in-7 dropped or paraphrased words: a sliding window of the fragment's length must hold ~all of
+    its words. Keeping short fragments strict matters — one discriminating word ('lung' vs 'biliary
+    tract') changes the code's meaning."""
+    words = _tokens(fragment)
+    if not words:
+        return False
+    if len(words) <= 10:
+        it = iter(text_words)
+        return all(any(t == w for t in it) for w in words)
+    want = Counter(words)
+    width = len(words) + 3
+    win = Counter(text_words[:width])
+    best = 0
+    for i in range(width, len(text_words) + 1):
+        best = max(best, sum(min(v, want[k]) for k, v in win.items()))
+        if i < len(text_words):
+            win[text_words[i]] += 1
+            win[text_words[i - width]] -= 1
+            if not win[text_words[i - width]]:
+                del win[text_words[i - width]]
+    return best >= len(words) - max(1, len(words) // 7)
+
+
+def evidence_found(evidence: str, text: str, label: str = "") -> bool:
+    """Every quote fragment must appear in the text, verbatim or with small word drift. Fragments that
+    merely restate the category's own description are skipped: the model sometimes pastes the catalog
+    label next to a real quote. An evidence string that is only a label still fails."""
     haystack = _norm(text)
-    fragments = [_norm(f) for f in re.split(r"\.\.\.|…|;", evidence or "")]
-    fragments = [f for f in fragments if f]
-    return bool(fragments) and all(f in haystack for f in fragments)
+    text_words = _tokens(text)
+    label_n = _norm(label)
+    found_any = False
+    for raw in re.split(r"\.\.\.|…|;", evidence or ""):
+        f = _norm(raw)
+        if not f or (label_n and f == label_n):
+            continue
+        if f in haystack or _near_match(raw, text_words):
+            found_any = True
+            continue
+        return False
+    return found_any
 
 
 def validate(answer: dict, categories: dict, text: str) -> list:
@@ -200,7 +249,7 @@ def validate(answer: dict, categories: dict, text: str) -> list:
                 "code": code,
                 "confidence": confidence,
                 "evidence": evidence,
-                "evidence_found": evidence_found(evidence, text),
+                "evidence_found": evidence_found(evidence, text, categories.get(code, "")),
             }
         )
     return out[:MAX_CODES]
