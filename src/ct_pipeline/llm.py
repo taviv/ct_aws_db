@@ -255,6 +255,24 @@ def validate(answer: dict, categories: dict, text: str) -> list:
     return out[:MAX_CODES]
 
 
+def revalidate_entry(entry: dict, text: str, categories: dict) -> bool:
+    """Re-run the current evidence_found on a cached entry's codes, in place. Cached flags were
+    computed by whatever matching rules were live when the answer was written, so a stricter or
+    looser gate since then leaves them stale. Returns True if any flag changed."""
+    changed = False
+    for c in entry.get("codes") or []:
+        found = evidence_found(c.get("evidence") or "", text, categories.get(c["code"], ""))
+        if found != c.get("evidence_found"):
+            c["evidence_found"] = found
+            changed = True
+    return changed
+
+
+def strong_codes(entry: dict) -> list:
+    """Verified codes at high confidence — what a study needs before a retry is pointless."""
+    return [c["code"] for c in entry.get("codes") or [] if c.get("evidence_found") and c.get("confidence") == "high"]
+
+
 class BedrockCoder:
     """One Converse call per study, with the instructions + catalog as a cached system prompt and a forced tool call."""
 

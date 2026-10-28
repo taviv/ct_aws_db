@@ -254,3 +254,42 @@ def test_llm_state_machine_loops_until_no_progress_then_publishes():
     assert states["MoreToCode"]["Choices"][0]["Next"] == "CodePass"
     template = (root / "template.yaml").read_text()
     assert all(f"{name}: !GetAtt" in template for name in re.findall(r"\$\{(\w+)\}", text))
+
+
+def test_revalidate_entry_updates_stale_flags():
+    text = (
+        "Inclusion criteria: adults with type 2 diabetes mellitus whose HbA1c stayed above "
+        "target on a stable dose of metformin for at least 12 weeks before screening."
+    )
+    categories = {"E11": "Type 2 diabetes mellitus"}
+    entry = {
+        "codes": [
+            # verbatim substring under the old gate, but it only restates the category label -> now False
+            {"code": "E11", "confidence": "high", "evidence": "Type 2 diabetes mellitus", "evidence_found": True},
+            # long quote with small drift ("a dose" -> "stable dose"): failed the old gate -> now True
+            {
+                "code": "E11",
+                "confidence": "high",
+                "evidence": "HbA1c stayed above target on a dose of metformin for at least 12 weeks",
+                "evidence_found": False,
+            },
+        ]
+    }
+    assert llm.revalidate_entry(entry, text, categories) is True
+    assert entry["codes"][0]["evidence_found"] is False
+    assert entry["codes"][1]["evidence_found"] is True
+    assert llm.strong_codes(entry) == ["E11"]
+
+
+def test_revalidate_entry_no_change():
+    text = "Patients with relapsing multiple sclerosis."
+    categories = {"G35": "Multiple sclerosis"}
+    entry = {
+        "codes": [
+            {"code": "G35", "confidence": "high", "evidence": "relapsing multiple sclerosis", "evidence_found": True}
+        ]
+    }
+    assert llm.revalidate_entry(entry, text, categories) is False
+    assert llm.strong_codes(entry) == ["G35"]
+    assert llm.strong_codes({"codes": [{"code": "G35", "confidence": "low", "evidence_found": True}]}) == []
+    assert llm.strong_codes({"codes": [{"code": "G35", "confidence": "high", "evidence_found": False}]}) == []
