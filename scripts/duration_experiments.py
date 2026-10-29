@@ -30,7 +30,7 @@ from ct_pipeline.build import attach_snapshot  # noqa: E402
 from ct_pipeline.config import CURRENT_KEY  # noqa: E402
 from ct_pipeline.db import connect  # noqa: E402
 from ct_pipeline.queries import PHASE_GROUP_LABELS  # noqa: E402
-from ct_pipeline.storage import S3Store, open_store  # noqa: E402
+from ct_pipeline.storage import LocalStore, S3Store, open_store  # noqa: E402
 
 TABLES = ("studies", "study_condition_codes", "study_locations", "study_outcomes")
 CHAPTERS = {
@@ -93,14 +93,50 @@ WHERE code_system = 'ICD10CM' AND icd10_chapter IS NOT NULL
 """
 
 
+DASHBOARD_KEY = "data/duration_by_condition.json"
+
+
+def stack_output(stack: str, key: str) -> str:
+    import boto3
+
+    outputs = boto3.client("cloudformation").describe_stacks(StackName=stack)["Stacks"][0]["Outputs"]
+    return next(o["OutputValue"] for o in outputs if o["OutputKey"] == key)
+
+
 def open_data(args):
     if args.data:
         return open_store(args.data)
-    import boto3
+    return S3Store(stack_output(args.stack, "DataBucketName"))
 
-    outputs = boto3.client("cloudformation").describe_stacks(StackName=args.stack)["Stacks"][0]["Outputs"]
-    bucket = next(o["OutputValue"] for o in outputs if o["OutputKey"] == "DataBucketName")
-    return S3Store(bucket)
+
+def open_site(args):
+    """Site store for the dashboard payload: --site, else <data>/../site locally, else the stack's SiteBucket."""
+    if args.site:
+        return open_store(args.site)
+    if args.data:
+        site = Path(args.data).parent / "site"
+        return LocalStore(site) if not str(args.data).startswith("s3") and site.exists() else None
+    return S3Store(stack_output(args.stack, "SiteBucketName"))
+
+
+def dashboard_payload(results, chapters) -> dict:
+    """Per-chapter KM medians and adjusted time ratios for the Study Duration tab."""
+    km = {r["group"]: r for r in results["km"]}
+    rows = []
+    for c in chapters:
+        label = CHAPTERS.get(c, str(c))
+        if label in km:
+            m = results["models"].get(f"ch_{c}", {})
+            rows.append(
+                {
+                    "chapter": c,
+                    "label": label,
+                    **km[label],
+                    **{k: m.get(k) for k in ("time_ratio", "tr_low", "tr_high")},
+                }
+            )
+    keep = ("run_id", "as_of", "generated_at", "trials", "phases", "fit")
+    return {**{k: results[k] for k in keep}, "overall": km.get("All trials"), "chapters": rows}
 
 
 def frame_days(text: str) -> float | None:
@@ -260,6 +296,8 @@ def main():
     ap.add_argument("--as-of", help="censoring date YYYY-MM-DD (default: snapshot date)")
     ap.add_argument("--min-n", type=int, default=300, help="smallest chapter to report")
     ap.add_argument("--out", default="duration_report", help="output directory (report.md + results.json)")
+    ap.add_argument("--site", help=f"site store for {DASHBOARD_KEY} (default: the stack's SiteBucket)")
+    ap.add_argument("--no-publish", action="store_true", help=f"don't write {DASHBOARD_KEY}")
     args = ap.parse_args()
 
     store = open_data(args)
@@ -354,6 +392,10 @@ def main():
     ]
     (out / "report.md").write_text("\n".join(report))
     print(f"Wrote {out / 'report.md'} and {out / 'results.json'}")
+    site = None if args.no_publish else open_site(args)
+    if site is not None:
+        site.put_json(DASHBOARD_KEY, dashboard_payload(results, chapters))
+        print(f"Wrote {DASHBOARD_KEY} ({site.location(DASHBOARD_KEY)})")
 
 
 if __name__ == "__main__":
