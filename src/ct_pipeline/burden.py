@@ -173,11 +173,9 @@ NCHS_FILES = {
 DIAG_COLUMNS = [f"DIAG{i}" for i in range(1, 6)]
 
 
-def visit_rows(source: str, year: int, df) -> list[dict]:
+def visit_rows(source: str, year: int, weights: list, diags: list) -> list[dict]:
     """Survey-weighted visits per category: a visit counts once per category among DIAG1-5 (any-listed), and
     separately for its first-listed diagnosis."""
-    weights = df["PATWT"].astype(float).tolist()
-    diags = df[DIAG_COLUMNS].astype(str).values.tolist()
     any_w: dict[str, float] = {}
     any_n: dict[str, int] = {}
     first_w: dict[str, float] = {}
@@ -208,7 +206,9 @@ def fetch_nchs(keys, cache: Path, log=print) -> list[dict]:
         with zipfile.ZipFile(path) as z:
             name = next(n for n in z.namelist() if n.lower().endswith(".dta"))
             df = pd.read_stata(io.BytesIO(z.read(name)), convert_categoricals=False, columns=[*DIAG_COLUMNS, "PATWT"])
-        rows = visit_rows(source, year, df)
+        rows = visit_rows(
+            source, year, df["PATWT"].astype(float).tolist(), df[DIAG_COLUMNS].astype(str).values.tolist()
+        )
         log(f"  {source} {year}: {len(df):,} records, {df['PATWT'].sum() / 1e6:,.1f}M weighted visits")
         out += rows
     return out

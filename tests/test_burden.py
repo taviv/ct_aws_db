@@ -1,5 +1,3 @@
-import pandas as pd
-
 from ct_pipeline import burden
 
 
@@ -50,17 +48,14 @@ def test_parse_wonder_export():
 
 
 def test_visit_rows_counts_a_visit_once_per_category():
-    df = pd.DataFrame(
-        {
-            "DIAG1": ["E119", "J069", "-9"],
-            "DIAG2": ["E118", "E11-", "-9"],
-            "DIAG3": ["I10-", "-9", "-9"],
-            "DIAG4": ["-9", "-9", "-9"],
-            "DIAG5": ["ZZZ1", "-9", "-9"],
-            "PATWT": [100.0, 50.0, 25.0],
-        }
-    )
-    rows = {(r["measure"], r["icd10_category"]): r for r in burden.visit_rows("namcs", 2019, df)}
+    diags = [
+        ["E119", "E118", "I10-", "-9", "ZZZ1"],
+        ["J069", "E11-", "-9", "-9", "-9"],
+        ["-9", "-9", "-9", "-9", "-9"],
+    ]
+    rows = {
+        (r["measure"], r["icd10_category"]): r for r in burden.visit_rows("namcs", 2019, [100.0, 50.0, 25.0], diags)
+    }
     assert rows[("visits_any_dx", "E11")]["value"] == 150.0
     assert rows[("visits_any_dx", "E11")]["n_records"] == 2
     assert rows[("visits_first_dx", "E11")]["value"] == 100.0
