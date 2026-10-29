@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match duration-experiments verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match duration-experiments us-burden verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -106,6 +106,13 @@ duration-experiments:
 	@test -x $(ANALYSIS_VENV)/bin/python || $(VERIFY_PY) -m venv $(ANALYSIS_VENV)
 	@$(ANALYSIS_VENV)/bin/python -m pip install -q --no-cache-dir -r src/requirements.txt boto3 lifelines
 	$(ANALYSIS_VENV)/bin/python scripts/duration_experiments.py --stack $(STACK) $(ARGS)
+
+## US burden (CDC WONDER deaths, NAMCS/NHAMCS visits, optional GBD CSVs) vs US phase 3 trials per ICD-10
+## category (writes burden_report/burden.csv, trials.csv, validation.md; read-only, downloads cached in /tmp)
+us-burden:
+	@test -x $(ANALYSIS_VENV)/bin/python || $(VERIFY_PY) -m venv $(ANALYSIS_VENV)
+	@$(ANALYSIS_VENV)/bin/python -m pip install -q --no-cache-dir -r src/requirements.txt boto3 pandas
+	$(ANALYSIS_VENV)/bin/python scripts/us_burden.py --stack $(STACK) $(ARGS)
 
 ## Progress of the latest llm-code-cloud run
 llm-status:

@@ -9,3 +9,4 @@ samconfig.toml
 .verify-venv/
 .analysis-venv/
 duration_report/
+burden_report/
