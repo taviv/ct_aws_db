@@ -12,14 +12,17 @@ Then counts phase 3 (incl. phase 2/3) trials started since --since with at least
 ICD-10-CM category, and writes:
   <out>/burden.csv      long table: source, measure, year, icd10_category, icd10_chapter, gbd_cause, value, ...
   <out>/trials.csv      US phase 3 trials per category
-  <out>/validation.md   top categories by trial count next to mean annual deaths and visits
-and uploads them to the data bucket under analysis/us_burden/ (--no-publish to skip).
+  <out>/validation.md   top disease categories by trial count next to mean annual deaths and visits
+  <out>/us_burden.json  per-chapter and per-category payload for the Trials vs Burden tab
+uploads the first three to the data bucket under analysis/us_burden/ and the JSON to the SiteBucket as
+data/us_burden.json (--no-publish to skip).
 
 Read-only against the stack; no LLM calls.
 """
 
 import argparse
 import csv
+import json
 import sys
 import tempfile
 from collections import defaultdict
@@ -31,12 +34,19 @@ from ct_pipeline import burden  # noqa: E402
 from ct_pipeline.build import attach_snapshot  # noqa: E402
 from ct_pipeline.config import CURRENT_KEY, REFERENCE_CURRENT_KEY  # noqa: E402
 from ct_pipeline.db import connect  # noqa: E402
-from ct_pipeline.storage import S3Store, open_store  # noqa: E402
+from ct_pipeline.storage import LocalStore, S3Store, open_store  # noqa: E402
 
 TABLES = ("studies", "study_condition_codes", "study_locations")
 # own prefix: reference/ is pruned as versioned snapshots, curated/ likewise
 PUBLISH_PREFIX = "analysis/us_burden/"
 OUTPUTS = {"burden.csv": "text/csv", "trials.csv": "text/csv", "validation.md": "text/markdown"}
+DASHBOARD_KEY = "data/us_burden.json"
+# Not diseases: symptoms (R), external causes (V-Y), health status/encounters (Z); and neoplasm catch-alls
+# (ill-defined, secondary and unspecified sites) that say nothing about the cancer type.
+NON_DISEASE_CHAPTERS = {18, 20, 21}
+CATCH_ALL_CATEGORIES = {"C76", "C77", "C78", "C79", "C80"}
+LABEL_OVERRIDES = {"U07": "COVID-19"}  # ICD-10-CM titles U07 "Emergency use of U07"
+INJURY_CHAPTER, EXTERNAL_CHAPTER = 19, 20  # WONDER codes injury deaths to external causes, not S/T
 TRIALS_SQL = """
 WITH us AS (SELECT DISTINCT nct_id FROM study_locations WHERE country = 'United States'),
 p3 AS (
@@ -72,6 +82,16 @@ def stack_output(stack: str, key: str) -> str:
 
 def open_data(args):
     return open_store(args.data) if args.data else S3Store(stack_output(args.stack, "DataBucketName"))
+
+
+def open_site(args):
+    """Site store for the dashboard payload: --site, else <data>/../site locally, else the stack's SiteBucket."""
+    if args.site:
+        return open_store(args.site)
+    if args.data:
+        site = Path(args.data).parent / "site"
+        return LocalStore(site) if not str(args.data).startswith("s3") and site.exists() else None
+    return S3Store(stack_output(args.stack, "SiteBucketName"))
 
 
 def trial_counts(store, args):
@@ -111,8 +131,24 @@ def mean_by(rows, source, measure, key):
     return {k: v / len(years) for k, v in sums.items()}, sorted(years)
 
 
+def is_disease(cat, ch) -> bool:
+    return ch not in NON_DISEASE_CHAPTERS and cat not in CATCH_ALL_CATEGORIES
+
+
+def label_of(cat, labels) -> str:
+    return LABEL_OVERRIDES.get(cat) or labels.get(cat, "")
+
+
+def per(n, denom, scale):
+    return n / denom * scale if denom else None
+
+
 def fmt(x):
     return "" if x is None else f"{x:,.0f}"
+
+
+def fmt1(x):
+    return "" if x is None else f"{x:,.1f}"
 
 
 def span(years):
@@ -133,15 +169,19 @@ def validation_md(rows, as_of, total, cats, chapters, since, top, labels=None):
         "survey-weighted mean per year, any of up to 5 listed diagnoses. Deaths are WHO ICD-10, the rest ICD-10-CM; "
         "injury deaths are coded to external causes (V01-Y89), so S/T categories show no deaths.",
         "",
-        "| Category | Ch. | US ph3 trials | Deaths/yr | Office visits/yr | ED visits/yr | Trials per 100k deaths |",
-        "|---|---|---|---|---|---|---|",
+        "",
+        "Symptom (R), external-cause (V-Y) and Z categories and neoplasm catch-alls (C76-C80: ill-defined, "
+        "secondary and unspecified sites) are left out of this table; chapter totals below include them.",
+        "",
+        "| Category | Ch. | US ph3 trials | Deaths/yr | Office visits/yr | ED visits/yr | "
+        "Trials per 100k deaths | Trials per 1M office visits |",
+        "|---|---|---|---|---|---|---|---|",
     ]
-    for cat, ch, n in cats[:top]:
-        d = deaths.get(cat)
-        per = f"{n / d * 1e5:,.1f}" if d else ""
+    for cat, ch, n in [c for c in cats if is_disease(c[0], c[1])][:top]:
+        d, o = deaths.get(cat), office.get(cat)
         out.append(
-            f"| {cat} {labels.get(cat, '')} | {ch} | {n:,} | {fmt(d)} | {fmt(office.get(cat))} | "
-            f"{fmt(ed.get(cat))} | {per} |"
+            f"| {cat} {label_of(cat, labels)} | {ch} | {n:,} | {fmt(d)} | {fmt(o)} | {fmt(ed.get(cat))} | "
+            f"{fmt1(per(n, d, 1e5))} | {fmt1(per(n, o, 1e6))} |"
         )
     deaths_ch, _ = mean_by(rows, "cdc_wonder_ucd", "deaths", "icd10_chapter")
     office_ch, _ = mean_by(rows, "namcs", "visits_any_dx", "icd10_chapter")
@@ -164,6 +204,60 @@ def validation_md(rows, as_of, total, cats, chapters, since, top, labels=None):
     return "\n".join(out) + "\n"
 
 
+def dashboard_payload(rows, as_of, total, cats, chapters, since, labels=None, top=60) -> dict:
+    """Chapter- and category-level trials vs burden for the Trials vs Burden tab."""
+    labels = labels or {}
+    deaths, dy = mean_by(rows, "cdc_wonder_ucd", "deaths", "icd10_category")
+    office, oy = mean_by(rows, "namcs", "visits_any_dx", "icd10_category")
+    ed, ey = mean_by(rows, "nhamcs_ed", "visits_any_dx", "icd10_category")
+    deaths_ch, _ = mean_by(rows, "cdc_wonder_ucd", "deaths", "icd10_chapter")
+    office_ch, _ = mean_by(rows, "namcs", "visits_any_dx", "icd10_chapter")
+    ed_ch, _ = mean_by(rows, "nhamcs_ed", "visits_any_dx", "icd10_chapter")
+    dalys_ch, gy = mean_by(rows, "ihme_gbd", "dalys", "icd10_chapter")
+    prev_ch, _ = mean_by(rows, "ihme_gbd", "prevalence", "icd10_chapter")
+    # injury deaths sit under external causes in WONDER; show them on the injury chapter
+    deaths_ch[INJURY_CHAPTER] = deaths_ch.get(INJURY_CHAPTER, 0) + deaths_ch.pop(EXTERNAL_CHAPTER, 0) or None
+
+    def rnd(x):
+        return None if x is None else round(x)
+
+    chapter_rows = [
+        {
+            "chapter": ch,
+            "label": CHAPTER_NAMES.get(ch, str(ch)),
+            "trials": n,
+            "deaths": rnd(deaths_ch.get(ch)),
+            "office_visits": rnd(office_ch.get(ch)),
+            "ed_visits": rnd(ed_ch.get(ch)),
+            "dalys": rnd(dalys_ch.get(ch)),
+            "prevalence": rnd(prev_ch.get(ch)),
+        }
+        for ch, n in sorted(chapters.items(), key=lambda kv: -kv[1])
+        if ch not in NON_DISEASE_CHAPTERS
+    ]
+    category_rows = [
+        {
+            "code": cat,
+            "label": label_of(cat, labels),
+            "chapter": ch,
+            "trials": n,
+            "deaths": rnd(deaths.get(cat)),
+            "office_visits": rnd(office.get(cat)),
+            "ed_visits": rnd(ed.get(cat)),
+        }
+        for cat, ch, n in cats
+        if is_disease(cat, ch)
+    ][:top]
+    return {
+        "as_of": as_of,
+        "since": since,
+        "trials": total,
+        "years": {"deaths": dy, "office_visits": oy, "ed_visits": ey, "gbd": gy},
+        "chapters": chapter_rows,
+        "categories": category_rows,
+    }
+
+
 def write_csv(path, rows, columns):
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=columns)
@@ -182,7 +276,8 @@ def main():
     ap.add_argument("--wonder-export", nargs="*", default=[], help="WONDER web-form export(s) for later years")
     ap.add_argument("--skip", nargs="*", default=[], choices=["wonder", "namcs", "nhamcs_ed", "trials"])
     ap.add_argument("--top", type=int, default=10, help="rows in the validation table")
-    ap.add_argument("--no-publish", action="store_true", help=f"don't upload the outputs to {PUBLISH_PREFIX}")
+    ap.add_argument("--site", help=f"site store for {DASHBOARD_KEY} (default: the stack's SiteBucket)")
+    ap.add_argument("--no-publish", action="store_true", help=f"don't upload to {PUBLISH_PREFIX} or {DASHBOARD_KEY}")
     args = ap.parse_args()
 
     first = int(args.since[:4])
@@ -221,7 +316,9 @@ def main():
         (out / "validation.md").write_text(
             validation_md(rows, as_of, total, cats, chapters, args.since, args.top, labels)
         )
-        print(f"Wrote {out / 'trials.csv'} and {out / 'validation.md'}")
+        payload = dashboard_payload(rows, as_of, total, cats, chapters, args.since, labels)
+        (out / "us_burden.json").write_text(json.dumps(payload, indent=1))
+        print(f"Wrote {out / 'trials.csv'}, {out / 'validation.md'} and {out / 'us_burden.json'}")
 
     if args.no_publish:
         return
@@ -229,6 +326,10 @@ def main():
         if (out / name).exists():
             store.upload(out / name, PUBLISH_PREFIX + name, content_type)
     print(f"Uploaded {', '.join(OUTPUTS)} to {store.location(PUBLISH_PREFIX)}")
+    site = open_site(args)
+    if site and (out / "us_burden.json").exists():
+        site.put_json(DASHBOARD_KEY, json.loads((out / "us_burden.json").read_text()))
+        print(f"Wrote {DASHBOARD_KEY} ({site.location(DASHBOARD_KEY)})")
 
 
 if __name__ == "__main__":
