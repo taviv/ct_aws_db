@@ -41,6 +41,7 @@ MAX_BIOMARKERS = 8
 MAX_EXCLUSIONS = 6
 MAX_STR = 240
 MAX_FIELD_STR = 120
+MULTIPLE_LABEL = "Multiple cancer types"
 STATUSES = ("RECRUITING", "ENROLLING_BY_INVITATION")
 
 # recruiting interventional trials with a site in COUNTRIES and a malignant-neoplasm (C*) ICD-10-CM code
@@ -217,8 +218,9 @@ def trials_payload(
 ) -> dict:
     """data/trials.json: one row per answered trial, deterministic fields joined to the match output.
 
-    icd10 is the LLM's category, falling back to the first coding-tier category when the LLM gave none
-    (e.g. basket trials); icd10_codes lists the LLM category first, then every coding-tier category.
+    icd10 is the LLM's category; when the LLM gave none (e.g. basket trials) it falls back to the single
+    coding-tier category, or "" labelled MULTIPLE_LABEL when there are several. icd10_codes lists the
+    LLM category first, then every coding-tier category.
     """
     codes = codes or {}
     trials = []
@@ -230,7 +232,7 @@ def trials_payload(
         m = entry.get("match") or {}
         llm_code = m.get("icd10") or ""
         all_codes = list(dict.fromkeys([c for c in [llm_code, *codes.get(d["nct_id"], [])] if c]))
-        code = all_codes[0] if all_codes else ""
+        code = all_codes[0] if len(all_codes) == 1 or llm_code else ""
         for c in all_codes:
             labels[c] = categories.get(c, "")
         loc = locs.get(d["nct_id"], {})
@@ -242,7 +244,7 @@ def trials_payload(
                 "status": d.get("overall_status") or "",
                 "disease": m.get("disease", ""),
                 "icd10": code,
-                "icd10_label": categories.get(code, ""),
+                "icd10_label": categories.get(code, "") if code or not all_codes else MULTIPLE_LABEL,
                 "icd10_llm": llm_code,
                 "icd10_codes": all_codes,
                 "setting": m.get("setting", ""),

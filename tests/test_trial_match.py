@@ -197,12 +197,16 @@ def test_trials_payload_multi_codes_and_fallback():
         "NCT1": trial_match.build_entry(cats, "m")({**ans, "icd10": "C92"}, "h", "t"),
         "NCT2": trial_match.build_entry(cats, "m")({**ans, "icd10": ""}, "h", "t"),
     }
-    codes = {"NCT1": ["C91", "C92"], "NCT2": ["C91", "C92"]}
+    codes = {"NCT1": ["C91", "C92"], "NCT2": ["C91"]}
     payload = trial_match.trials_payload({}, docs, entries, {}, cats, "m", codes)
     t1, t2 = payload["trials"]
     assert t1["icd10"] == "C92" and t1["icd10_codes"] == ["C92", "C91"] and t1["icd10_llm"] == "C92"
     assert t2["icd10"] == "C91" and t2["icd10_label"] == "Lymphoid leukemia" and t2["icd10_llm"] == ""
     assert payload["icd10_labels"] == {"C91": "Lymphoid leukemia", "C92": "Myeloid leukemia"}
+    payload = trial_match.trials_payload({}, docs, entries, {}, cats, "m", {"NCT2": ["C91", "C92"]})
+    t2 = payload["trials"][1]
+    assert t2["icd10"] == "" and t2["icd10_label"] == trial_match.MULTIPLE_LABEL
+    assert t2["icd10_codes"] == ["C91", "C92"]
 
 
 def test_write_review_rows(tmp_path):
