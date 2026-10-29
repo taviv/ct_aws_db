@@ -155,6 +155,7 @@
       text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
     }
     .chart-box canvas { width: 100% !important; }
+    .chart-note { font-size: 0.78rem; color: var(--muted); margin: -8px 0 12px; }
 
     /* Table */
     .table-box {
@@ -340,6 +341,21 @@
     </div>
   </div>
 
+  <!-- Duration by ICD-10 chapter (data/duration_by_condition.json, from make duration-experiments) -->
+  <div class="chart-row two" id="cond-row" style="display:none">
+    <div class="chart-box">
+      <h2>Median Duration by ICD-10 Chapter</h2>
+      <p class="chart-note" id="cond-note"></p>
+      <canvas id="chart-cond-median" height="420"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Adjusted Time Ratio by Chapter</h2>
+      <p class="chart-note">Weibull AFT, adjusted for phase, enrollment, sites, countries, sponsor, randomisation,
+        masking, purpose, healthy volunteers and start year. &gt;1 = longer than trials outside the chapter.</p>
+      <canvas id="chart-cond-tr" height="420"></canvas>
+    </div>
+  </div>
+
   <!-- Studies table -->
   <div class="table-box">
     <h2>Longest Completed Studies (top 100)</h2>
@@ -371,6 +387,7 @@
 // ---------------------------------------------------------------------------
 const API_URL = 'api/query';
 const OVERVIEW_URL = 'data/overview.json';
+const CONDITION_URL = 'data/duration_by_condition.json';
 
 // ---------------------------------------------------------------------------
 // API helper
@@ -593,6 +610,92 @@ function updateSponsorChart(rows) {
 }
 
 // ---------------------------------------------------------------------------
+// Duration by ICD-10 chapter (static, not affected by the filters above)
+// ---------------------------------------------------------------------------
+const AXIS = { ticks: { color: '#8892a4' }, grid: { color: '#2a2d3e' } };
+
+async function loadConditionPanels() {
+  let d;
+  try {
+    const res = await fetch(CONDITION_URL, { cache: 'no-cache' });
+    if (!res.ok) return;
+    d = await res.json();
+  } catch (e) {
+    console.warn('Could not load duration by condition:', e);
+    return;
+  }
+  const rows = (d.chapters || []).filter(r => r.km_median_days != null)
+    .sort((a, b) => b.km_median_days - a.km_median_days);
+  if (!rows.length) return;
+  document.getElementById('cond-row').style.display = '';
+  const o = d.overall || {};
+  document.getElementById('cond-note').textContent =
+    `${d.trials.toLocaleString()} started interventional trials with ICD-10-CM codes, snapshot ${d.run_id}, ` +
+    `as of ${d.as_of}. "Incl. ongoing" is the Kaplan-Meier median with running trials censored ` +
+    `(all trials: ${(o.km_median_days || 0).toLocaleString()} vs ${(o.completed_only_median_days || 0).toLocaleString()} ` +
+    `days completed only). Not affected by the filters above.`;
+
+  mkChart('chart-cond-median', {
+    type: 'bar',
+    data: {
+      labels: rows.map(r => r.label),
+      datasets: [
+        { label: 'Incl. ongoing (KM median)', data: rows.map(r => r.km_median_days),
+          backgroundColor: PALETTE[0], borderRadius: 3 },
+        { label: 'Completed only', data: rows.map(r => r.completed_only_median_days),
+          backgroundColor: PALETTE[2], borderRadius: 3 },
+      ],
+    },
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: {
+        legend: { labels: { color: '#8892a4' } },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.x.toLocaleString()} days`,
+          afterBody: items => {
+            const r = rows[items[0].dataIndex];
+            return [`${r.trials.toLocaleString()} trials, ${r.ended.toLocaleString()} ended`,
+                    `KM 95% CI ${r.km_ci_low ?? '?'}–${r.km_ci_high ?? '?'} days`,
+                    `${r.pct_ended_by_3y}% ended within 3 years`];
+          },
+        } },
+      },
+      scales: {
+        x: { ...AXIS, title: { display: true, text: 'Median days', color: '#8892a4', font: { size: 11 } } },
+        y: { ticks: { color: '#8892a4', autoSkip: false }, grid: { display: false } },
+      },
+    },
+  });
+
+  const tr = rows.filter(r => r.time_ratio != null).sort((a, b) => b.time_ratio - a.time_ratio);
+  mkChart('chart-cond-tr', {
+    type: 'bar',
+    data: {
+      labels: tr.map(r => r.label),
+      datasets: [{
+        label: 'Time ratio', data: tr.map(r => [1, r.time_ratio]),
+        backgroundColor: tr.map(r => r.time_ratio >= 1 ? '#ef4444' : '#14b8a6'),
+        borderRadius: 3, borderSkipped: false,
+      }],
+    },
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => {
+          const r = tr[ctx.dataIndex];
+          return ` ${r.time_ratio}× (95% CI ${r.tr_low}–${r.tr_high})`;
+        } } },
+      },
+      scales: {
+        x: { ...AXIS, title: { display: true, text: 'Time ratio (1 = no difference)', color: '#8892a4', font: { size: 11 } } },
+        y: { ticks: { color: '#8892a4', autoSkip: false }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Studies table
 // ---------------------------------------------------------------------------
 function updateTable(rows, maxDays) {
@@ -726,6 +829,8 @@ async function init() {
   } catch (e) {
     console.warn('Could not load year list:', e);
   }
+
+  loadConditionPanels();
 
   // Load all charts with no filters
   await applyFilters();

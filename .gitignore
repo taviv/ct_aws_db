@@ -7,3 +7,5 @@ __pycache__/
 local/
 samconfig.toml
 .verify-venv/
+.analysis-venv/
+duration_report/
