@@ -50,7 +50,7 @@ CHAPTERS = {
     14: "Genitourinary",
     15: "Pregnancy",
     16: "Perinatal",
-    17: "Congenital",
+    17: "Congenital & genetic",
     18: "Symptoms/signs",
     19: "Injury/poisoning",
     20: "External causes",
