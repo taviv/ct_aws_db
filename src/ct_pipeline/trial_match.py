@@ -67,6 +67,14 @@ LOCATIONS_SQL = """
     GROUP BY 1
 """
 
+# malignant-neoplasm ICD-10-CM categories per study from the condition-coding tier
+CANCER_CODES_SQL = """
+    SELECT nct_id, list_sort(list_distinct(list(coalesce(icd10_category, left(code, 3))))) AS cats
+    FROM study_condition_codes
+    WHERE code_system = 'ICD10CM' AND code LIKE 'C%' AND nct_id IN (SELECT unnest(?::VARCHAR[]))
+    GROUP BY 1
+"""
+
 INSTRUCTIONS = """You extract matching fields from a cancer clinical trial protocol so that a doctor can
 tell whether a patient might be eligible.
 
@@ -199,15 +207,32 @@ def locations(con, nct_ids, countries=COUNTRIES) -> dict:
     return out
 
 
-def trials_payload(current: dict, docs: list, entries: dict, locs: dict, categories: dict, model: str) -> dict:
-    """data/trials.json: one row per answered trial, deterministic fields joined to the match output."""
+def cancer_codes(con, nct_ids) -> dict:
+    """{nct_id: [C* ICD-10-CM categories]} assigned by the condition-coding tier."""
+    return {n: [c for c in cats if c] for n, cats in con.execute(CANCER_CODES_SQL, [list(nct_ids)]).fetchall()}
+
+
+def trials_payload(
+    current: dict, docs: list, entries: dict, locs: dict, categories: dict, model: str, codes: dict | None = None
+) -> dict:
+    """data/trials.json: one row per answered trial, deterministic fields joined to the match output.
+
+    icd10 is the LLM's category, falling back to the first coding-tier category when the LLM gave none
+    (e.g. basket trials); icd10_codes lists the LLM category first, then every coding-tier category.
+    """
+    codes = codes or {}
     trials = []
+    labels = {}
     for d in docs:
         entry = entries.get(d["nct_id"])
         if entry is None:
             continue
         m = entry.get("match") or {}
-        code = m.get("icd10") or ""
+        llm_code = m.get("icd10") or ""
+        all_codes = list(dict.fromkeys([c for c in [llm_code, *codes.get(d["nct_id"], [])] if c]))
+        code = all_codes[0] if all_codes else ""
+        for c in all_codes:
+            labels[c] = categories.get(c, "")
         loc = locs.get(d["nct_id"], {})
         trials.append(
             {
@@ -218,6 +243,8 @@ def trials_payload(current: dict, docs: list, entries: dict, locs: dict, categor
                 "disease": m.get("disease", ""),
                 "icd10": code,
                 "icd10_label": categories.get(code, ""),
+                "icd10_llm": llm_code,
+                "icd10_codes": all_codes,
                 "setting": m.get("setting", ""),
                 "prior_therapy": m.get("prior_therapy", ""),
                 "biomarkers": m.get("biomarkers", []),
@@ -238,6 +265,7 @@ def trials_payload(current: dict, docs: list, entries: dict, locs: dict, categor
         "model": model,
         "prompt": PROMPT_VERSION,
         "count": len(trials),
+        "icd10_labels": dict(sorted(labels.items())),
         "trials": trials,
     }
 
