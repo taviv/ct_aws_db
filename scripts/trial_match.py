@@ -117,6 +117,7 @@ def main() -> None:
         if missing:
             print("Not in the snapshot:", ", ".join(missing))
         locs = trial_match.locations(con, ids, countries)
+        codes = trial_match.cancer_codes(con, ids)
         con.close()
 
         progress = lambda d, n: print(f"  {d:,}/{n:,}", flush=True)  # noqa: E731
@@ -137,7 +138,7 @@ def main() -> None:
         )
         print(f"Tokens: {usage_line(info['usage'], prices(args))}")
 
-        payload = trial_match.trials_payload(current, docs, entries, locs, categories, args.model)
+        payload = trial_match.trials_payload(current, docs, entries, locs, categories, args.model, codes)
         if not args.no_publish:
             site = open_site(args)
             if site is not None:

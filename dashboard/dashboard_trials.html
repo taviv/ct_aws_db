@@ -168,6 +168,7 @@
     <div class="filters">
       <input id="f-search" type="search" placeholder="Search title, disease, condition, biomarker…" oninput="renderTable()" />
       <select id="f-phase" onchange="renderTable()"><option value="">All phases</option></select>
+      <select id="f-icd" onchange="renderTable()"><option value="">All ICD-10 categories</option></select>
       <select id="f-setting" onchange="renderTable()"><option value="">All settings</option></select>
       <select id="f-country" onchange="renderTable()"><option value="">All countries</option></select>
       <select id="f-state" onchange="renderTable()"><option value="">All regions</option></select>
@@ -233,16 +234,25 @@ function fillSelects(d) {
     for (const v of values) sel.add(new Option(label ? label(v) : v, v));
   };
   add("f-phase", phases);
+  const labels = d.icd10_labels || {};
+  const icds = [...new Set(t.flatMap(x => x.icd10_codes || (x.icd10 ? [x.icd10] : [])))].sort();
+  add("f-icd", icds, c => labels[c] ? `${c} ${clip(labels[c], 45)}` : c);
   add("f-setting", settings, settingLabel);
   add("f-country", countries);
   add("f-state", states);
 }
 
 function matches(t, q) {
-  const hay = [t.nct_id, t.title, t.disease, t.icd10, t.icd10_label,
+  const hay = [t.nct_id, t.title, t.disease, t.icd10, t.icd10_label, ...(t.icd10_codes || []),
                ...(t.countries || []), ...(t.conditions || []), ...(t.biomarkers || []),
                ...(t.interventions || [])].join(" ").toLowerCase();
   return q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+
+function extraCodes(t) {
+  const labels = DATA.icd10_labels || {};
+  const more = (t.icd10_codes || []).filter(c => c !== t.icd10);
+  return more.length ? `<div>${more.map(c => `<span class="chip" title="${esc(labels[c] || "")}">${esc(c)}</span>`).join("")}</div>` : "";
 }
 
 function renderTable() {
@@ -252,9 +262,11 @@ function renderTable() {
   const country = document.getElementById("f-country").value;
   const state = document.getElementById("f-state").value;
   const conf = document.getElementById("f-conf").value;
+  const icd = document.getElementById("f-icd").value;
   const rows = (DATA.trials || []).filter(t =>
     (!q || matches(t, q)) &&
     (!phase || t.phase === phase) &&
+    (!icd || (t.icd10_codes || [t.icd10]).includes(icd)) &&
     (!setting || t.setting === setting) &&
     (!country || (t.countries || []).includes(country)) &&
     (!state || (t.states || []).includes(state)) &&
@@ -270,7 +282,8 @@ function renderTable() {
         <div class="title">${esc(clip(t.title, 110))}</div>
         <span class="muted">${esc(t.phase)}</span></td>
     <td><b>${esc(clip(t.disease, 90)) || "—"}</b>
-        <div class="muted">${esc(t.icd10)}${t.icd10_label ? " " + esc(clip(t.icd10_label, 50)) : ""}</div></td>
+        <div class="muted">${esc(t.icd10)}${t.icd10_label ? " " + esc(clip(t.icd10_label, 50)) : ""}</div>
+        ${extraCodes(t)}</td>
     <td><span class="badge ${esc(t.setting)}">${esc(settingLabel(t.setting))}</span></td>
     <td class="muted">${esc(clip(t.prior_therapy, 100)) || "—"}</td>
     <td>${(t.biomarkers || []).map(b => `<span class="chip bio">${esc(b)}</span>`).join("") || "—"}</td>
