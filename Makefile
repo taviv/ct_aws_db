@@ -100,10 +100,12 @@ trial-match:
 
 ## Trial duration vs ICD-10-CM chapter: censored KM medians, adjusted AFT/Cox models, duration
 ## decomposition (writes duration_report/report.md + results.json; read-only)
+# pandas/scipy/lifelines are ~500 MB: too big for CloudShell's 1 GB home, so the venv lives in /tmp
+ANALYSIS_VENV ?= /tmp/ct-analysis-venv
 duration-experiments:
-	@test -x .analysis-venv/bin/python || $(VERIFY_PY) -m venv .analysis-venv
-	@.analysis-venv/bin/python -m pip install -q -r src/requirements.txt boto3 lifelines
-	.analysis-venv/bin/python scripts/duration_experiments.py --stack $(STACK) $(ARGS)
+	@test -x $(ANALYSIS_VENV)/bin/python || $(VERIFY_PY) -m venv $(ANALYSIS_VENV)
+	@$(ANALYSIS_VENV)/bin/python -m pip install -q --no-cache-dir -r src/requirements.txt boto3 lifelines
+	$(ANALYSIS_VENV)/bin/python scripts/duration_experiments.py --stack $(STACK) $(ARGS)
 
 ## Progress of the latest llm-code-cloud run
 llm-status:
