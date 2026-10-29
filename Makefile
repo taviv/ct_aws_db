@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match duration-experiments verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -97,6 +97,13 @@ trial-match:
 	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
 	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
 	.verify-venv/bin/python scripts/trial_match.py --stack $(STACK) --model "$(MODEL)" $(ARGS)
+
+## Trial duration vs ICD-10-CM chapter: censored KM medians, adjusted AFT/Cox models, duration
+## decomposition (writes duration_report/report.md + results.json; read-only)
+duration-experiments:
+	@test -x .analysis-venv/bin/python || $(VERIFY_PY) -m venv .analysis-venv
+	@.analysis-venv/bin/python -m pip install -q -r src/requirements.txt boto3 lifelines
+	.analysis-venv/bin/python scripts/duration_experiments.py --stack $(STACK) $(ARGS)
 
 ## Progress of the latest llm-code-cloud run
 llm-status:
