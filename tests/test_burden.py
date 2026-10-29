@@ -79,3 +79,31 @@ def test_parse_gbd_filters_and_maps_chapters():
         ("dalys", "Neoplasms", 2, 21000000.0),
         ("dalys", "Diabetes and kidney diseases", None, 9000000.0),
     ]
+
+
+def test_dashboard_payload_and_validation_drop_non_disease_rows():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "us_burden", Path(__file__).resolve().parents[1] / "scripts" / "us_burden.py"
+    )
+    us = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(us)
+    rows = [
+        burden.row("cdc_wonder_ucd", "deaths", 2019, "C34", 100.0),
+        burden.row("cdc_wonder_ucd", "deaths", 2019, "W19", 30.0),
+        burden.row("cdc_wonder_ucd", "deaths", 2019, "S72", 0.0),
+        burden.row("namcs", "visits_any_dx", 2019, "C34", 2e6),
+    ]
+    cats = [("Z23", 21, 50), ("C79", 2, 40), ("C34", 2, 20), ("U07", 22, 10), ("S72", 19, 5)]
+    chapters = {2: 45, 21: 50, 22: 10, 19: 5}
+    p = us.dashboard_payload(rows, "2026-01-01", 100, cats, chapters, "2016-01-01", {"U07": "Emergency use"})
+    assert [c["code"] for c in p["categories"]] == ["C34", "U07", "S72"]
+    assert p["categories"][1]["label"] == "COVID-19"
+    by_ch = {c["chapter"]: c for c in p["chapters"]}
+    assert 21 not in by_ch and by_ch[19]["deaths"] == 30  # external-cause deaths shown on injury
+    assert by_ch[2]["deaths"] == 100 and by_ch[2]["office_visits"] == 2_000_000
+    md = us.validation_md(rows, "2026-01-01", 100, cats, chapters, "2016-01-01", 10)
+    assert "| C34" in md and "| Z23" not in md and "| C79" not in md
+    assert "| 20,000.0 | 10.0 |" in md  # trials per 100k deaths, per 1M office visits

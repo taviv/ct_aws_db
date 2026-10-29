@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trials vs US Burden</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:      #0f1117;
+      --surface: #1a1d27;
+      --border:  #2a2d3e;
+      --text:    #e2e8f0;
+      --muted:   #8892a4;
+      --accent:  #6366f1;
+      --green:   #22c55e;
+      --yellow:  #eab308;
+      --red:     #ef4444;
+      --blue:    #3b82f6;
+      --teal:    #14b8a6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+
+    /* Header */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    #refresh-btn {
+      background: var(--accent); color: #fff; border: none;
+      padding: 8px 18px; border-radius: 6px; cursor: pointer;
+      font-size: 0.85rem; font-weight: 600; transition: opacity .2s;
+    }
+    #refresh-btn:hover { opacity: .85; }
+    #refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* Nav */
+    nav {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex; gap: 4px;
+    }
+    nav a {
+      display: inline-block; padding: 10px 16px;
+      font-size: 0.82rem; font-weight: 600; text-decoration: none;
+      color: var(--muted); border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* Layout */
+    main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
+
+    /* Summary cards */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px; margin-bottom: 28px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px 18px;
+    }
+    .card .label {
+      font-size: 0.72rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px;
+    }
+    .card .value { font-size: 1.75rem; font-weight: 700; line-height: 1; }
+    .card .sub   { font-size: 0.72rem; color: var(--muted); margin-top: 5px; }
+    .card.accent .value { color: var(--accent); }
+    .card.green  .value { color: var(--green);  }
+    .card.blue   .value { color: var(--blue);   }
+    .card.yellow .value { color: var(--yellow); }
+    .card.teal   .value { color: var(--teal);   }
+
+    /* Chart grid */
+    .chart-row {
+      display: grid; gap: 20px; margin-bottom: 24px;
+    }
+    .chart-row.one   { grid-template-columns: 1fr; }
+    .chart-row.two   { grid-template-columns: 3fr 2fr; }
+    .chart-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px;
+    }
+    .chart-box h2 {
+      font-size: 0.82rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    .chart-box canvas { width: 100% !important; }
+    .chart-note { font-size: 0.78rem; color: var(--muted); margin: -8px 0 12px; }
+
+    /* Table */
+    .table-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px; overflow-x: auto;
+    }
+    .table-box h2 {
+      font-size: 0.82rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th {
+      text-align: left; padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 600;
+      text-transform: uppercase; font-size: 0.7rem; letter-spacing: .05em;
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(99,102,241,.06); }
+
+    select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px; font-size: 0.84rem; }
+    .intro { font-size: 0.85rem; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .over { color: var(--red); } .under { color: var(--teal); }
+    #empty { display: none; }
+    @media (max-width: 900px) { .chart-row.two { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>&#127758; Trials vs US Disease Burden</h1>
+    <p id="last-updated">Loading&hellip;</p>
+  </div>
+  <label style="font-size:.8rem;color:var(--muted)">Burden measure
+    <select id="f-measure" onchange="render()"></select></label>
+</header>
+
+<nav>
+  <a href="dashboard.html">Overview</a>
+  <a href="dashboard_duration.html">Study Duration</a>
+  <a href="dashboard_llm.html">LLM Coding</a>
+  <a href="dashboard_eval.html">Coding Eval</a>
+  <a href="dashboard_trials.html">Cancer Trials</a>
+  <a href="dashboard_burden.html" class="active">Trials vs Burden</a>
+</nav>
+
+<main>
+  <p class="intro" id="intro"></p>
+  <p class="intro" id="empty">No data yet: run <code>make us-burden</code> to publish <code>data/us_burden.json</code>.</p>
+
+  <div class="chart-row two" id="charts">
+    <div class="chart-box">
+      <h2>US Phase 3 Trials vs Burden by ICD-10 Chapter</h2>
+      <p class="chart-note">Log scales. The dashed line is a log-log fit across chapters: points above it get more
+        trials than their burden predicts, points below fewer.</p>
+      <canvas id="chart-scatter" height="440"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Trials Relative to Burden</h2>
+      <p class="chart-note">Actual trials &divide; trials predicted by the fit (1 = on the line).</p>
+      <canvas id="chart-ratio" height="440"></canvas>
+    </div>
+  </div>
+
+  <div class="table-box">
+    <h2>Top Disease Categories</h2>
+    <p class="chart-note">Symptom (R), external-cause, Z and neoplasm catch-all (C76&ndash;C80) categories left out.
+      A trial with several categories counts in each.</p>
+    <table>
+      <thead><tr><th>Category</th><th>Chapter</th><th class="num">US ph3 trials</th><th class="num">Deaths/yr</th>
+        <th class="num">Office visits/yr</th><th class="num">ED visits/yr</th>
+        <th class="num">Trials per 100k deaths</th><th class="num">Trials per 1M office visits</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="8">Loading&hellip;</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const DATA_URL = 'data/us_burden.json';
+const AXIS = { ticks: { color: '#8892a4' }, grid: { color: '#2a2d3e' } };
+const MEASURES = {
+  office_visits: { label: 'Office visits per year (NAMCS)', years: 'office_visits' },
+  deaths: { label: 'Deaths per year (CDC WONDER)', years: 'deaths' },
+  ed_visits: { label: 'ED visits per year (NHAMCS)', years: 'ed_visits' },
+  dalys: { label: 'DALYs per year (GBD)', years: 'gbd' },
+  prevalence: { label: 'Prevalent cases (GBD)', years: 'gbd' },
+};
+let DATA = null;
+const charts = {};
+
+function mkChart(id, config) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), config);
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = x => x == null ? '' : Math.round(x).toLocaleString();
+const fmt1 = x => x == null ? '' : x.toLocaleString(undefined, { maximumFractionDigits: 1 });
+const span = ys => !ys || !ys.length ? 'n/a' : ys.length > 2 && ys[ys.length - 1] - ys[0] === ys.length - 1
+  ? `${ys[0]}–${ys[ys.length - 1]}` : ys.join(', ');
+
+function fit(points) {
+  const xs = points.map(p => Math.log10(p.x)), ys = points.map(p => Math.log10(p.y));
+  const n = xs.length, mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0;
+  xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
+  const b = sxx ? sxy / sxx : 0, a = my - b * mx;
+  return x => 10 ** (a + b * Math.log10(x));
+}
+
+const pointLabels = {
+  id: 'pointLabels',
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx, meta = chart.getDatasetMeta(0);
+    ctx.save(); ctx.font = '11px sans-serif'; ctx.fillStyle = '#e2e8f0';
+    meta.data.forEach((el, i) => ctx.fillText(chart.data.datasets[0].data[i].label, el.x + 7, el.y + 4));
+    ctx.restore();
+  },
+};
+
+function render() {
+  const m = document.getElementById('f-measure').value, M = MEASURES[m];
+  const pts = DATA.chapters.filter(r => r[m] > 0 && r.trials > 0)
+    .map(r => ({ x: r[m], y: r.trials, label: r.label }));
+  if (pts.length < 3) return;
+  const f = fit(pts);
+  const xmin = Math.min(...pts.map(p => p.x)), xmax = Math.max(...pts.map(p => p.x));
+  pts.forEach(p => { p.ratio = p.y / f(p.x); });
+  mkChart('chart-scatter', {
+    type: 'scatter',
+    data: { datasets: [
+      { label: 'Chapters', data: pts, backgroundColor: pts.map(p => p.ratio >= 1 ? '#ef4444' : '#14b8a6'), pointRadius: 6 },
+      { label: 'Fit', type: 'line', data: [{ x: xmin, y: f(xmin) }, { x: xmax, y: f(xmax) }],
+        borderColor: '#8892a4', borderDash: [6, 4], pointRadius: 0, borderWidth: 1 },
+    ] },
+    options: {
+      responsive: true, layout: { padding: { right: 110 } },
+      plugins: { legend: { display: false }, tooltip: { filter: i => i.datasetIndex === 0, callbacks: {
+        label: ctx => { const p = ctx.raw; return ` ${p.label}: ${p.y.toLocaleString()} trials, ${fmt(p.x)} — ${p.ratio.toFixed(2)}× predicted`; },
+      } } },
+      scales: {
+        x: { ...AXIS, type: 'logarithmic', title: { display: true, text: M.label + ' (log)', color: '#8892a4' } },
+        y: { ...AXIS, type: 'logarithmic', title: { display: true, text: 'US phase 3 trials since ' + DATA.since.slice(0, 4) + ' (log)', color: '#8892a4' } },
+      },
+    },
+    plugins: [pointLabels],
+  });
+  const byRatio = [...pts].sort((a, b) => b.ratio - a.ratio);
+  mkChart('chart-ratio', {
+    type: 'bar',
+    data: { labels: byRatio.map(p => p.label), datasets: [{
+      data: byRatio.map(p => [1, p.ratio]), borderSkipped: false, borderRadius: 3,
+      backgroundColor: byRatio.map(p => p.ratio >= 1 ? '#ef4444' : '#14b8a6'),
+    }] },
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${byRatio[ctx.dataIndex].ratio.toFixed(2)}× predicted` } } },
+      scales: {
+        x: { ...AXIS, type: 'logarithmic', title: { display: true, text: 'Actual ÷ predicted trials (log)', color: '#8892a4' } },
+        y: { ticks: { color: '#8892a4', autoSkip: false }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderTable() {
+  const ch = Object.fromEntries(DATA.chapters.map(r => [r.chapter, r.label]));
+  document.getElementById('tbody').innerHTML = DATA.categories.map(r => `<tr>
+    <td><b>${esc(r.code)}</b> ${esc(r.label)}</td><td>${esc(ch[r.chapter] || r.chapter)}</td>
+    <td class="num">${r.trials.toLocaleString()}</td><td class="num">${fmt(r.deaths)}</td>
+    <td class="num">${fmt(r.office_visits)}</td><td class="num">${fmt(r.ed_visits)}</td>
+    <td class="num">${r.deaths ? fmt1(r.trials / r.deaths * 1e5) : ''}</td>
+    <td class="num">${r.office_visits ? fmt1(r.trials / r.office_visits * 1e6) : ''}</td></tr>`).join('');
+}
+
+async function init() {
+  try {
+    const res = await fetch(DATA_URL, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(res.status);
+    DATA = await res.json();
+  } catch (e) {
+    document.getElementById('charts').style.display = 'none';
+    document.getElementById('empty').style.display = 'block';
+    document.getElementById('last-updated').textContent = 'No data';
+    document.getElementById('tbody').innerHTML = '';
+    return;
+  }
+  const y = DATA.years;
+  const sel = document.getElementById('f-measure');
+  sel.innerHTML = Object.entries(MEASURES).filter(([k]) => DATA.chapters.some(r => r[k] > 0))
+    .map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+  document.getElementById('last-updated').textContent =
+    `${DATA.trials.toLocaleString()} US phase 3 / 2-3 trials started ${DATA.since} to ${DATA.as_of}`;
+  document.getElementById('intro').innerHTML =
+    `Trials: phase 3 or 2/3 interventional trials with at least one US site, counted per ICD-10-CM chapter (a trial ` +
+    `with codes in several chapters counts in each). Burden: annual means of CDC WONDER deaths (${span(y.deaths)}), ` +
+    `NAMCS office visits (${span(y.office_visits)}) and NHAMCS emergency visits (${span(y.ed_visits)})` +
+    (y.gbd && y.gbd.length ? `, and GBD DALYs/prevalence (${span(y.gbd)}, single-chapter causes only)` : '') +
+    `. Visits count any of up to 5 listed diagnoses and are summed over categories, so one visit can count more than ` +
+    `once in a chapter; they are visits, not people. Injury deaths, coded to external causes in WONDER, are shown on ` +
+    `Injury/poisoning. Symptom, external-cause and Z chapters are left out.`;
+  render();
+  renderTable();
+}
+init();
+</script>
+</body>
+</html>
