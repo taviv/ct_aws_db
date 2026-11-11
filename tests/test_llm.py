@@ -123,6 +123,19 @@ def test_code_studies_fails_fast_when_every_call_fails(catalog, store):
         llm.code_studies(coder, store, [DOC], catalog[1])
 
 
+@pytest.mark.parametrize("env, region", [({}, None), ({"BEDROCK_REGION": "us-east-1"}, "us-east-1")])
+def test_bedrock_client_region_from_env(monkeypatch, env, region):
+    import boto3
+
+    seen = {}
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(boto3, "client", lambda service, **kw: seen.update(service=service, **kw) or object())
+    assert llm.BedrockCoder("model-a", "catalog").client is not None
+    assert (seen["service"], seen["region_name"]) == ("bedrock-runtime", region)
+
+
 def test_code_studies_stops_at_deadline(catalog, store):
     coder = llm.BedrockCoder("model-a", catalog[0], client=FakeBedrock(LUNG))
     entries, info = llm.code_studies(coder, store, [DOC], catalog[1], deadline=time.monotonic() - 1)

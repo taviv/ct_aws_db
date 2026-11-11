@@ -176,6 +176,9 @@ make reference                                                          # publis
 make llm-try MODEL=<model or inference-profile id>                      # table for 10 ambiguous Phase 3 studies
 ```
 
+`BEDROCK_REGION=<region>` in front of any of these sends only the Bedrock calls to that region (e.g. a model enabled
+in us-east-1 only); the stack, data bucket and cache stay in the default region.
+
 `make llm-try` is a quick manual check that writes no cache: it samples studies with no exact code and a vague
 condition name ("Solid Tumors", "Advanced Cancer", ...), sends only the text fields in `--fields` (default
 `brief_summary`), and prints the codes with their quotes. `ARGS="--ids NCT07815665,NCT07522073 --fields

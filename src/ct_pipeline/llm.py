@@ -12,6 +12,7 @@ studies are sent again.
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections import Counter
@@ -302,7 +303,9 @@ class BedrockCoder:
             from botocore.config import Config
 
             self._client = boto3.client(
-                "bedrock-runtime", config=Config(retries={"mode": "adaptive", "max_attempts": 10}, read_timeout=120)
+                "bedrock-runtime",
+                region_name=os.environ.get("BEDROCK_REGION") or None,
+                config=Config(retries={"mode": "adaptive", "max_attempts": 10}, read_timeout=120),
             )
         return self._client
 
