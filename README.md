@@ -89,6 +89,7 @@ src/ct_pipeline/      one package; handlers.py has the Fetch, Transform, Build a
   llm.py              LLM condition coding (Bedrock) for studies without an exact code
 scripts/condition_stats.py  condition-coding coverage per phase behind `make condition-stats`
 scripts/llm_code.py   LLM coding runs and evaluation behind `make llm-eval` / `make llm-code` / `make llm-try`
+scripts/coding_accuracy.py  per-chapter precision/recall vs hand labels behind `make coding-accuracy`
 scripts/umls_coverage.py  what UMLS would add, behind `make umls-coverage`
 statemachine/         Step Functions definition (ASL)
 template.yaml         SAM template: buckets, functions, state machine, schedule, CloudFront, Athena
@@ -209,6 +210,41 @@ make llm-status    # latest run: RUNNING/SUCCEEDED/FAILED, passes, studies still
 `ARGS` takes `--phase`, `--limit`, `--workers`, the prices, and `--no-publish` (skip the final Reference run).
 A run ends without publishing as FAILED if a pass raises (e.g. no Bedrock access to the model); if a pass makes no
 progress because every call failed, the loop stops and publishes what is cached. `make llm-status` shows the error.
+
+### Coding accuracy experiment
+
+`make coding-accuracy` measures the published ICD-10-CM codes against hand labels, per chapter, so each medical area
+gets a go / fix / develop call. Unlike `make llm-xeval` (deterministic vs LLM codes), the answer key is a human label
+per study and category. Phase 3 only by default; healthy-volunteer and vaccine trials are excluded as in xeval.
+Outputs go to `analysis/coding_accuracy/` in the data bucket and to `./coding_accuracy/`.
+
+```
+make coding-accuracy ARGS="sample"                       # 50 studies per top-8 chapter + the xeval random 300; free
+make coding-accuracy ARGS="code --models A,B,C"          # per model: studies already answered, to code, est. cost
+make coding-accuracy ARGS="code --models A,B,C --go --price-in 3.3 --price-out 16.5 --price-cache-read 0.33"
+make coding-accuracy ARGS="sheet --models A,B,C --pilot 4"   # coding_accuracy/labels_pilot.csv (~4 per chapter)
+make coding-accuracy ARGS="sheet --models A,B,C"             # coding_accuracy/labels.csv
+make coding-accuracy ARGS="score --labels coding_accuracy/labels.csv --cascade A,B"
+```
+
+- **Sample.** A study belongs to a chapter when any published code (exact or broad) or a condition/title keyword points
+  there, so studies the pipeline missed can still be drawn. The xeval random sample (seed 1) is used first, and is
+  also scored on its own as the unstratified "Random sample". 10% of studies are blind, 10% go to a second reviewer.
+- **Arms.** Each model writes its own cache (`analysis/coding_accuracy/llm_cache_<model>.json`); answers already in the
+  production or eval cache for the same model and prompt are copied, so the current Haiku 4.5 arm is mostly free.
+  `code` without `--go` sends nothing to Bedrock.
+- **Sheet.** `predictions.json` freezes every system's codes. `labels.csv` has one row per candidate category (the
+  union of the published codes and every arm's verified codes, without saying who proposed them) and one
+  "add missing" row per study. Fill `correct` (y/n), `primary` (y), `error_type` (1–8, see `ERROR_TYPES` in
+  `src/ct_pipeline/accuracy.py`) and `missing_codes` (e.g. `*C34, E11`; `*` marks the main diagnosis). Blind studies
+  have no candidates: write the codes in `missing_codes`. Label all models' candidates before scoring; a code a model
+  adds later needs a new label.
+- **Score.** Per chapter and system (`published`, `mesh_only`, `rules_only`, `llm_only:<model>`,
+  `combined:<model>`, optional `combined:cascade`): code-level precision/recall/F1 on exact codes with 95%
+  study-clustered bootstrap intervals, primary-diagnosis hit rate, coverage, error types and a go/fix/develop call
+  (`--min-precision 0.9 --min-recall 0.85 --min-primary 0.9`). `combined:<model>` adds the model's codes only where
+  the rules have no exact code, as production does. McNemar compares each arm's primary hits with the published
+  codes; `--second FILE` adds Cohen's kappa. Studies with an unlabeled candidate are skipped and counted.
 
 ## Dashboards
 
