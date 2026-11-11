@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match duration-experiments us-burden verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match coding-accuracy duration-experiments us-burden verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -89,6 +89,13 @@ llm-adjudicate:
 	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
 	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
 	.verify-venv/bin/python scripts/llm_code.py xeval --stack $(STACK) --adjudicate "$(FILE)"
+
+## Coding accuracy by ICD-10-CM chapter vs hand labels (README: "Coding accuracy experiment"):
+## ARGS="sample" | "code --models a,b [--go]" | "sheet --models a,b [--pilot 4]" | "score --labels labels.csv"
+coding-accuracy:
+	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
+	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
+	.verify-venv/bin/python scripts/coding_accuracy.py --stack $(STACK) $(ARGS)
 
 ## Cancer trial finder PoV: extract patient-matching fields for recruiting cancer
 ## trials with a US/CA/AU/UK site (phase 2+) and publish data/trials.json for the "Cancer Trials" tab
