@@ -243,11 +243,12 @@ make coding-accuracy ARGS="score --labels coding_accuracy/labels.csv --cascade A
   Supplementary categories (B95–B97, T36–T50, V–Y, and Z codes other than Z00/Z23) are left out of the sheet, the
   gold set and every system's predictions (`accuracy.SUPPLEMENTARY`).
 - **Score.** Per chapter and system (`published`, `mesh_only`, `rules_only`, `llm_only:<model>`,
-  `combined:<model>`, optional `combined:cascade`): code-level precision/recall/F1 on exact codes with 95%
+  `combined:<model>`, `llm_first:<model>`, optional `combined:cascade`): code-level precision/recall/F1 on exact codes with 95%
   study-clustered bootstrap intervals, primary-diagnosis hit rate, coverage, error types and a go/fix/develop call
   (`--min-precision 0.9 --min-recall 0.85 --min-primary 0.9`). `combined:<model>` adds the model's codes only where
-  the rules have no exact code, as production does. McNemar compares each arm's primary hits with the published
-  codes; `--second FILE` adds Cohen's kappa. Studies with an unlabeled candidate are skipped and counted.
+  the rules have no exact code, as production does; `llm_first:<model>` is the reverse: the model's publishable codes
+  stand, and the rules' codes are used only where the model has none. McNemar compares each combined and LLM-first
+  arm's primary hits with the published codes; `--second FILE` adds Cohen's kappa. Studies with an unlabeled candidate are skipped and counted.
 
 ## Dashboards
 

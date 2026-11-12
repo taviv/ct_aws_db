@@ -100,6 +100,14 @@ def test_systems_combine_rules_and_llm_only_where_rules_have_no_exact_code():
     assert accuracy.systems(coded, ["a"])["combined:a"] == ({"E11"}, {"E11"})
 
 
+def test_llm_first_keeps_the_model_codes_and_falls_back_to_rules_only_without_them():
+    coded = _study(published=[("E11", "mesh", "exact"), ("E66", "rules", "broad")], arms={"a": [_code("E10")]})
+    assert accuracy.systems(coded, ["a"])["llm_first:a"] == ({"E10"}, {"E10"})
+    unsure = _study(published=[("E11", "mesh", "exact")], arms={"a": [_code("E10", "low")], "b": []})
+    s = accuracy.systems(unsure, ["a", "b"])
+    assert s["llm_first:a"] == ({"E11"}, {"E11", "E10"}) and s["llm_first:b"] == ({"E11"}, {"E11"})
+
+
 def test_cascade_falls_back_when_the_cheap_arm_is_unsure():
     s = _study(arms={"a": [_code("C34", "medium")], "b": [_code("C50")]})
     assert accuracy.systems(s, ["a", "b"], cascade=("a", "b"))["combined:cascade"][0] == {"C50"}

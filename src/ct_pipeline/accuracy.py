@@ -372,6 +372,8 @@ def systems(study: dict, models, cascade=None) -> dict:
         # the LLM tier only codes studies without an exact rules code, and never replaces one
         target = not rules_exact
         out[f"combined:{m}"] = (rules_exact | (exact if target else set()), rules_all | (verified if target else set()))
+        # LLM-first: the model's publishable codes stand; the rules fill in only where it has none
+        out[f"llm_first:{m}"] = (exact, verified) if exact else (rules_exact, rules_all | verified)
     return {k: tuple({c for c in v if scored(c)} for v in pair) for k, pair in out.items()}
 
 
@@ -485,10 +487,10 @@ def score(preds: dict, labels: dict, cascade=None, reps=1000, seed=1, thresholds
                     m["decision"] = decide(m, thresholds, errors)
                 results[group]["systems"].setdefault(name, {})[view] = m
 
-    # paired comparison of primary-diagnosis hits, each combined arm vs the published codes
+    # paired comparison of primary-diagnosis hits, each combined or LLM-first arm vs the published codes
     paired = {}
     for name in names:
-        if not name.startswith("combined:"):
+        if not name.startswith(("combined:", "llm_first:")):
             continue
         b = c = 0
         for n, (_, _, p, _) in by_id.items():
