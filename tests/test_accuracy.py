@@ -189,3 +189,25 @@ def test_decide_mcnemar_and_kappa():
     assert round(accuracy.mcnemar(10, 0), 4) == 0.002
     assert accuracy.kappa([(True, True), (False, False)]) == 1.0
     assert accuracy.kappa([(True, False), (False, True)]) == -1.0
+
+
+def test_supplementary_codes_are_left_out_of_sheet_gold_and_systems(tmp_path):
+    assert [
+        c for c in ("Z79", "Z99", "B95", "T39", "T50", "W19", "Z00", "Z23", "B20", "T51") if accuracy.scored(c)
+    ] == [
+        "Z00",
+        "Z23",
+        "B20",
+        "T51",
+    ]
+    s = _study(published=[("E11", "mesh", "exact"), ("Z79", "mesh", "exact")], arms={"a": [_code("B96")]})
+    assert set(accuracy.candidates(s)) == {"E11"}
+    assert accuracy.systems(s, ["a"])["published"] == ({"E11"}, {"E11"})
+    labels = _labels(
+        tmp_path,
+        [
+            {"nct_id": "NCT1", "code": "E11", "correct": "y", "primary": "y"},
+            {"nct_id": "NCT1", "missing_codes": "Z79, T46"},
+        ],
+    )
+    assert accuracy.gold(s, labels["NCT1"]) == ({"E11"}, {"E11"}, [])

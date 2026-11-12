@@ -239,6 +239,8 @@ make coding-accuracy ARGS="score --labels coding_accuracy/labels.csv --cascade A
   `src/ct_pipeline/accuracy.py`) and `missing_codes` (e.g. `*C34, E11`; `*` marks the main diagnosis). Blind studies
   have no candidates: write the codes in `missing_codes`. Label all models' candidates before scoring; a code a model
   adds later needs a new label.
+  Supplementary categories (B95–B97, T36–T50, V–Y, and Z codes other than Z00/Z23) are left out of the sheet, the
+  gold set and every system's predictions (`accuracy.SUPPLEMENTARY`).
 - **Score.** Per chapter and system (`published`, `mesh_only`, `rules_only`, `llm_only:<model>`,
   `combined:<model>`, optional `combined:cascade`): code-level precision/recall/F1 on exact codes with 95%
   study-clustered bootstrap intervals, primary-diagnosis hit rate, coverage, error types and a go/fix/develop call

@@ -53,6 +53,15 @@ KEYWORDS = {
     14: r"kidney|renal|bladder|urinary|nephr|endometriosis|prostatic hyperplasia|infertility",
 }
 YES = {"y", "yes", "1", "true", "x"}
+# supplementary categories (infectious agent B95-B97, drug poisoning/adverse effect T36-T50, external causes V-Y,
+# status/history Z codes) are left out of the sheet and of scoring; Z00/Z23 stay as the healthy-population codes
+SUPPLEMENTARY = re.compile(r"B9[5-7]|T(3[6-9]|4[0-9]|50)|[V-Y]..|Z(?!00|23)..")
+
+
+def scored(code: str) -> bool:
+    return not SUPPLEMENTARY.fullmatch(code[:3])
+
+
 ERROR_TYPES = {
     "1": "wrong MeSH term at CT.gov",
     "2": "wrong crosswalk row",
@@ -235,10 +244,10 @@ def predictions(sample: dict, docs, published: dict, arms: dict) -> dict:
 
 def candidates(study: dict) -> dict:
     """category -> LLM quotes, for every category any system predicts for the study."""
-    out = {r["code"]: [] for r in study["published"]}
+    out = {r["code"]: [] for r in study["published"] if scored(r["code"])}
     for codes in study["arms"].values():
         for c in codes:
-            if c.get("evidence_found"):
+            if c.get("evidence_found") and scored(c["code"]):
                 out.setdefault(c["code"], [])
                 if c.get("evidence") and c["evidence"] not in out[c["code"]]:
                     out[c["code"]].append(c["evidence"])
@@ -318,6 +327,8 @@ def gold(study: dict, labels: dict | None):
     g = {c for c in cands if rows[c]["correct"].strip().lower() in YES}
     p = {c for c in cands if (rows[c].get("primary") or "").strip().lower() in YES}
     for code, primary in labels["missing"]:
+        if not scored(code):
+            continue
         g.add(code)
         if primary:
             p.add(code)
@@ -361,7 +372,7 @@ def systems(study: dict, models, cascade=None) -> dict:
         # the LLM tier only codes studies without an exact rules code, and never replaces one
         target = not rules_exact
         out[f"combined:{m}"] = (rules_exact | (exact if target else set()), rules_all | (verified if target else set()))
-    return out
+    return {k: tuple({c for c in v if scored(c)} for v in pair) for k, pair in out.items()}
 
 
 def _ratio(a, b):
