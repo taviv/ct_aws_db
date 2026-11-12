@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v7"
+PROMPT_VERSION = "v8"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 8000
@@ -43,9 +43,11 @@ INSTRUCTIONS = """You assign ICD-10-CM categories to clinical trial protocols.
 
 Code the disease or condition of the population the study enrolls. Do not code interventions, outcomes,
 adverse events, or conditions that are only exclusion criteria or comorbidities.
-Inclusion vs exclusion: code only conditions participants must have to enroll (title, conditions, summary,
-inclusion criteria). Never code a condition named only under the exclusion criteria, a condition participants
-are merely allowed to have (e.g. "HIV co-infection is permitted"), or a comorbidity common in the population.
+Inclusion vs exclusion: the exclusion criteria have been removed from the eligibility text. Code only
+conditions participants must have to enroll (title, conditions, summary, inclusion criteria). Never code a
+condition the text says participants must not have (e.g. "no history of stroke", "patients with diabetes are not
+eligible"), a condition participants are merely allowed to have (e.g. "HIV co-infection is permitted"), or a
+comorbidity common in the population.
 Prevention: if the study tries to prevent a condition participants do not have yet (e.g. stroke prevention,
 preventing preterm birth or post-operative nausea), do not code the prevented condition; code the condition they
 have at enrollment that puts them at risk (e.g. atrial fibrillation for stroke prevention). If they have none,
@@ -170,8 +172,9 @@ def render_study(doc: dict, fields=DEFAULT_FIELDS) -> str:
         parts.append("Interventions: " + "; ".join(doc["interventions"]))
     for field in fields:
         heading, limit = TEXT_FIELDS[field]
-        if doc.get(field):
-            parts.append(f"{heading}:\n" + _truncate(doc[field], limit))
+        value = without_exclusions(doc.get(field) or "") if field == "eligibility_criteria" else doc.get(field)
+        if value and value.strip():
+            parts.append(f"{heading}:\n" + _truncate(value, limit))
     return "\n\n".join(parts)
 
 
@@ -216,18 +219,26 @@ def _near_match(fragment: str, text_words: list) -> bool:
     return best >= len(words) - max(1, len(words) // 7)
 
 
-_EXCLUSION_HEADER = re.compile(r"(?im)^[ \t*#-]*(?:key |main |major )?exclusion(?:s?\s*:|\s+criteria\b)")
+_EXCLUSION_HEADER = re.compile(
+    # a line starting with a short heading such as "Key Exclusion Criteria:", "2.3.2 EXCLUSION CRITERIA" or "Exclusion"
+    r"(?im)^[ \t*#-]*(?:[\w().&,\\]+[ \t]+){0,6}?exclusions?\b(?:[ \t]+criteria)?[^\n:.;]{0,25}(?::|$)"
+    # an inline heading in flattened text: "... informed consent Exclusion Criteria: 1. ..."
+    r"|(?<![/\w])exclusion[ \t]+criteria\b[^\n:.;]{0,10}(?::|$)"
+    r"|^[^\n]{0,80}\b(?:will[ \t]+be|are)[ \t]+excluded[ \t]*:"
+)
 _SECTION_END = re.compile(
-    r"\n\n(?:Summary|Detailed description|Eligibility criteria):\n|^[ \t*#-]*(?:key )?inclusion criteria\b",
+    r"\n\n(?:Summary|Detailed description|Eligibility criteria):\n|^[ \t*#-]*(?:key )?inclusion criteria\b"
+    r"|(?<![/\w])inclusion[ \t]+criteria[ \t]*:",
     re.I | re.M,
 )
 
 
 def without_exclusions(text: str) -> str:
-    """The text with every exclusion-criteria block cut out (up to the next inclusion block or text section)."""
+    """The text with every exclusion-criteria block cut out (up to the next inclusion block or text section).
+    A heading that negates ("there are no platform exclusion criteria") starts no block."""
     out, pos = [], 0
     for m in _EXCLUSION_HEADER.finditer(text):
-        if m.start() < pos:
+        if m.start() < pos or re.search(r"(?i)\b(?:no|not|none)\b", m.group(0)):
             continue
         out.append(text[pos : m.start()])
         end = _SECTION_END.search(text, m.end())
