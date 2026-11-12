@@ -248,16 +248,20 @@ def without_exclusions(text: str) -> str:
 
 
 def evidence_found(evidence: str, text: str, label: str = "") -> bool:
-    """Every quote fragment must appear in the text, verbatim or with small word drift. Fragments that
-    merely restate the category's own description are skipped: the model sometimes pastes the catalog
-    label next to a real quote. An evidence string that is only a label still fails."""
+    """Every quote fragment must appear in the text, verbatim or with small word drift. A fragment that
+    restates the category's own description is skipped unless the protocol contains it verbatim (e.g.
+    "Conditions: Asthma"): the model sometimes pastes the catalog label next to a real quote. An evidence
+    string that is only a label not in the text still fails."""
     haystack = _norm(text)
     text_words = _tokens(text)
     label_n = _norm(label)
     found_any = False
     for raw in re.split(r"\.\.\.|…|;", evidence or ""):
         f = _norm(raw)
-        if not f or (label_n and f == label_n):
+        if not f:
+            continue
+        if label_n and f == label_n:
+            found_any = found_any or f in haystack
             continue
         if f in haystack or _near_match(raw, text_words):
             found_any = True

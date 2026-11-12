@@ -222,6 +222,11 @@ def test_evidence_label_fragments_are_skipped():
     assert not llm.evidence_found(
         "Malignant neoplasm of breast", "unrelated text", label="Malignant neoplasm of breast"
     )
+    # a condition name that happens to equal the label is a real quote when the protocol has it verbatim
+    assert llm.evidence_found(
+        "Type 2 Diabetes Mellitus", "Conditions: Type 2 Diabetes Mellitus", "Type 2 diabetes mellitus"
+    )
+    assert not llm.evidence_found("Type 2 diabetes mellitus", "Conditions: T2DM", label="Type 2 diabetes mellitus")
     # a label fragment does not rescue other fragments that do not match
     assert not llm.evidence_found(
         "Malignant neoplasm of breast; small cell lung carcinoma",
@@ -268,13 +273,13 @@ def test_llm_state_machine_loops_until_no_progress_then_publishes():
 
 def test_revalidate_entry_updates_stale_flags():
     text = (
-        "Inclusion criteria: adults with type 2 diabetes mellitus whose HbA1c stayed above "
+        "Inclusion criteria: adults with T2DM whose HbA1c stayed above "
         "target on a stable dose of metformin for at least 12 weeks before screening."
     )
     categories = {"E11": "Type 2 diabetes mellitus"}
     entry = {
         "codes": [
-            # verbatim substring under the old gate, but it only restates the category label -> now False
+            # only restates the category label, which the protocol never uses -> now False
             {"code": "E11", "confidence": "high", "evidence": "Type 2 diabetes mellitus", "evidence_found": True},
             # long quote with small drift ("a dose" -> "stable dose"): failed the old gate -> now True
             {
