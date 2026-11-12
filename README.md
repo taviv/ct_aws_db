@@ -159,7 +159,7 @@ only the derived ICD-10-CM codes (public domain) appear in `study_condition_code
 
 **LLM tier (optional, Amazon Bedrock).** For studies with no exact ICD-10-CM code, `scripts/llm_code.py` sends
 the protocol (titles, conditions, interventions, the first 2,000 characters of the summary and of the detailed
-description, the first 8,000 of the eligibility criteria) to a Bedrock model together with the full ICD-10-CM
+description, the first 8,000 of the eligibility criteria with the exclusion criteria cut out) to a Bedrock model together with the full ICD-10-CM
 category list as a cached system prompt. The model must pick at most 12 categories from that list and quote the
 protocol text supporting each one; answers whose quote is not in the protocol, or is only in the exclusion
 criteria, are not published. Answers are

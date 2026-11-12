@@ -236,7 +236,8 @@ def test_prompt_rules(catalog):
     assert "C77-C79 only when the study targets the metastases" in system
     assert "code that symptom or complication first" in system
     assert "low = a generic fallback" in system
-    assert "Never code a condition named only under the exclusion criteria" in system
+    assert "exclusion criteria have been removed from the eligibility text" in system
+    assert "Never code a\ncondition the text says participants must not have" in system
     assert "do not code the prevented condition" in system
 
 
@@ -328,3 +329,25 @@ def test_quotes_found_only_in_exclusion_criteria_are_not_evidence(catalog):
     assert llm.without_exclusions("Patients with relapsing multiple sclerosis.") == (
         "Patients with relapsing multiple sclerosis."
     )
+
+
+def test_exclusion_headings_in_other_layouts():
+    flat = "Inclusion Criteria: - adults with GHD - on hGH Exclusion Criteria: - active malignant disease"
+    assert llm.without_exclusions(flat) == "Inclusion Criteria: - adults with GHD - on hGH "
+    numbered = "2.3.1 Inclusion criteria\n- asthma\n2.3.2 EXCLUSION CRITERIA\n- COPD"
+    assert "COPD" not in llm.without_exclusions(numbered) and "asthma" in llm.without_exclusions(numbered)
+    sentence = "1. Acute kidney injury\n\nPatients with the following conditions will be excluded:\n\n1. Cirrhosis"
+    assert llm.without_exclusions(sentence) == "1. Acute kidney injury\n\n"
+    for heading in ("Key Exclusion Criteria (all cohorts):", "Cohort 1 Main Exclusion Criteria:", "Exclusion:"):
+        assert llm.without_exclusions(f"* adults with gout\n{heading}\n* diabetes") == "* adults with gout\n"
+    kept = "* adults with gout\n* There are no platform level exclusion criteria\n* Inclusion/Exclusion Criteria: below"
+    assert llm.without_exclusions(kept) == kept
+
+
+def test_model_never_sees_exclusion_criteria():
+    text = llm.render_study(
+        DOC | {"eligibility_criteria": "Inclusion Criteria:\n\n* gout\n\nExclusion Criteria:\n\n* type 2 diabetes"}
+    )
+    assert "gout" in text and "diabetes" not in text
+    only_exclusions = DOC | {"eligibility_criteria": "Exclusion Criteria: diabetes"}
+    assert "Eligibility criteria" not in llm.render_study(only_exclusions)
