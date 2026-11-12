@@ -236,6 +236,8 @@ def test_prompt_rules(catalog):
     assert "C77-C79 only when the study targets the metastases" in system
     assert "code that symptom or complication first" in system
     assert "low = a generic fallback" in system
+    assert "Never code a condition named only under the exclusion criteria" in system
+    assert "do not code the prevented condition" in system
 
 
 def test_evidence_survives_list_numbers_and_spacing():
@@ -300,3 +302,29 @@ def test_revalidate_entry_no_change():
     assert llm.strong_codes(entry) == ["G35"]
     assert llm.strong_codes({"codes": [{"code": "G35", "confidence": "low", "evidence_found": True}]}) == []
     assert llm.strong_codes({"codes": [{"code": "G35", "confidence": "high", "evidence_found": False}]}) == []
+
+
+def test_quotes_found_only_in_exclusion_criteria_are_not_evidence(catalog):
+    _, categories = catalog
+    text = llm.render_study(
+        DOC
+        | {
+            "conditions": ["Lung Cancer"],
+            "eligibility_criteria": "Inclusion Criteria:\n\n* non-small cell lung cancer\n\n"
+            "Exclusion Criteria:\n\n* type 2 diabetes mellitus requiring insulin\n* healthy volunteers",
+        }
+    )
+    kept = llm.without_exclusions(text)
+    assert "non-small cell lung cancer" in kept and "insulin" not in kept and "healthy" not in kept
+    answer = {
+        "codes": [
+            {"code": "C34", "evidence": "non-small cell lung cancer", "confidence": "high"},
+            {"code": "E11", "evidence": "type 2 diabetes mellitus requiring insulin", "confidence": "high"},
+        ]
+    }
+    assert [c["evidence_found"] for c in llm.validate(answer, categories, text)] == [True, False]
+    reversed_ = "Exclusion criteria: prior insulin use\nInclusion criteria: type 2 diabetes\n\nSummary:\nDrug X."
+    assert llm.without_exclusions(reversed_) == "Inclusion criteria: type 2 diabetes\n\nSummary:\nDrug X."
+    assert llm.without_exclusions("Patients with relapsing multiple sclerosis.") == (
+        "Patients with relapsing multiple sclerosis."
+    )

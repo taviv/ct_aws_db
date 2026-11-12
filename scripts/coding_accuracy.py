@@ -196,6 +196,15 @@ def main() -> None:
             missing = len(sample["ids"]) - len(entries)
             if missing > 0:
                 print(f"Warning: {m} has no answer for {missing} studies (run `code --go` first)")
+        by_id = {d["nct_id"]: d for d in docs}
+        changed = sum(
+            llm.revalidate_entry(e, llm.render_study(by_id[n]), categories)
+            for entries in arms.values()
+            for n, e in entries.items()
+            if n in by_id
+        )
+        if changed:
+            print(f"Re-checked cached evidence under the current rules: {changed} answers changed")
         preds = accuracy.predictions(sample, docs, accuracy.published_rows(con, sample["ids"]), arms)
         save(store, out, accuracy.PREDICTIONS_KEY, preds)
         rows = accuracy.sheet_rows(preds, categories, args.pilot)

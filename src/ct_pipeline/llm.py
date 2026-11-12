@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v6"
+PROMPT_VERSION = "v7"
 CACHE_KEY = "reference/llm_cache.json"
 MAX_SUMMARY_CHARS = 2000
 MAX_ELIGIBILITY_CHARS = 8000
@@ -43,6 +43,13 @@ INSTRUCTIONS = """You assign ICD-10-CM categories to clinical trial protocols.
 
 Code the disease or condition of the population the study enrolls. Do not code interventions, outcomes,
 adverse events, or conditions that are only exclusion criteria or comorbidities.
+Inclusion vs exclusion: code only conditions participants must have to enroll (title, conditions, summary,
+inclusion criteria). Never code a condition named only under the exclusion criteria, a condition participants
+are merely allowed to have (e.g. "HIV co-infection is permitted"), or a comorbidity common in the population.
+Prevention: if the study tries to prevent a condition participants do not have yet (e.g. stroke prevention,
+preventing preterm birth or post-operative nausea), do not code the prevented condition; code the condition they
+have at enrollment that puts them at risk (e.g. atrial fibrillation for stroke prevention). If they have none,
+return no codes and give the reason.
 If the study treats a symptom or complication (e.g. nausea, pain, anxiety, cachexia, thrombocytopenia) in
 patients with a disease, code that symptom or complication first; add the disease only if its site or type is named.
 Use the protocol text to resolve vague condition names: for "advanced solid tumors", code the specific cancers
@@ -209,6 +216,26 @@ def _near_match(fragment: str, text_words: list) -> bool:
     return best >= len(words) - max(1, len(words) // 7)
 
 
+_EXCLUSION_HEADER = re.compile(r"(?im)^[ \t*#-]*(?:key |main |major )?exclusion(?:s?\s*:|\s+criteria\b)")
+_SECTION_END = re.compile(
+    r"\n\n(?:Summary|Detailed description|Eligibility criteria):\n|^[ \t*#-]*(?:key )?inclusion criteria\b",
+    re.I | re.M,
+)
+
+
+def without_exclusions(text: str) -> str:
+    """The text with every exclusion-criteria block cut out (up to the next inclusion block or text section)."""
+    out, pos = [], 0
+    for m in _EXCLUSION_HEADER.finditer(text):
+        if m.start() < pos:
+            continue
+        out.append(text[pos : m.start()])
+        end = _SECTION_END.search(text, m.end())
+        pos = end.start() if end else len(text)
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def evidence_found(evidence: str, text: str, label: str = "") -> bool:
     """Every quote fragment must appear in the text, verbatim or with small word drift. Fragments that
     merely restate the category's own description are skipped: the model sometimes pastes the catalog
@@ -229,8 +256,9 @@ def evidence_found(evidence: str, text: str, label: str = "") -> bool:
 
 
 def validate(answer: dict, categories: dict, text: str) -> list:
-    """Keep catalog categories (a full code like C34.1 is cut back to C34), deduplicated, at most MAX_CODES."""
-    out, seen = [], set()
+    """Keep catalog categories (a full code like C34.1 is cut back to C34), deduplicated, at most MAX_CODES.
+    A quote found only in the exclusion criteria doesn't count as evidence."""
+    out, seen, kept = [], set(), without_exclusions(text)
     for item in (answer or {}).get("codes") or []:
         if not isinstance(item, dict):
             continue
@@ -249,7 +277,7 @@ def validate(answer: dict, categories: dict, text: str) -> list:
                 "code": code,
                 "confidence": confidence,
                 "evidence": evidence,
-                "evidence_found": evidence_found(evidence, text, categories.get(code, "")),
+                "evidence_found": evidence_found(evidence, kept, categories.get(code, "")),
             }
         )
     return out[:MAX_CODES]
@@ -259,9 +287,9 @@ def revalidate_entry(entry: dict, text: str, categories: dict) -> bool:
     """Re-run the current evidence_found on a cached entry's codes, in place. Cached flags were
     computed by whatever matching rules were live when the answer was written, so a stricter or
     looser gate since then leaves them stale. Returns True if any flag changed."""
-    changed = False
+    changed, kept = False, without_exclusions(text)
     for c in entry.get("codes") or []:
-        found = evidence_found(c.get("evidence") or "", text, categories.get(c["code"], ""))
+        found = evidence_found(c.get("evidence") or "", kept, categories.get(c["code"], ""))
         if found != c.get("evidence_found"):
             c["evidence_found"] = found
             changed = True
