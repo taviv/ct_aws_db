@@ -161,7 +161,8 @@ only the derived ICD-10-CM codes (public domain) appear in `study_condition_code
 the protocol (titles, conditions, interventions, the first 2,000 characters of the summary and of the detailed
 description, the first 8,000 of the eligibility criteria) to a Bedrock model together with the full ICD-10-CM
 category list as a cached system prompt. The model must pick at most 12 categories from that list and quote the
-protocol text supporting each one; answers whose quote is not in the protocol are not published. Answers are
+protocol text supporting each one; answers whose quote is not in the protocol, or is only in the exclusion
+criteria, are not published. Answers are
 cached per study in `reference/llm_cache.json`, keyed by a hash of the
 model input, so reruns only send new or changed studies. Codes are category level (e.g. C34, E11); `low`
 confidence and the catch-all categories C76-C80 and C96 (ill-defined, secondary or unspecified sites) are published as
