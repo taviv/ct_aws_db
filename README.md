@@ -90,6 +90,7 @@ src/ct_pipeline/      one package; handlers.py has the Fetch, Transform, Build a
 scripts/condition_stats.py  condition-coding coverage per phase behind `make condition-stats`
 scripts/llm_code.py   LLM coding runs and evaluation behind `make llm-eval` / `make llm-code` / `make llm-try`
 scripts/coding_accuracy.py  per-chapter precision/recall vs hand labels behind `make coding-accuracy`
+scripts/recruiting_codes.py  LLM-first codes for recruiting US/Canada phase 3 trials, `make recruiting-codes`
 scripts/umls_coverage.py  what UMLS would add, behind `make umls-coverage`
 statemachine/         Step Functions definition (ASL)
 template.yaml         SAM template: buckets, functions, state machine, schedule, CloudFront, Athena
@@ -211,6 +212,21 @@ make llm-status    # latest run: RUNNING/SUCCEEDED/FAILED, passes, studies still
 `ARGS` takes `--phase`, `--limit`, `--workers`, the prices, and `--no-publish` (skip the final Reference run).
 A run ends without publishing as FAILED if a pass raises (e.g. no Bedrock access to the model); if a pass makes no
 progress because every call failed, the loop stops and publishes what is cached. `make llm-status` shows the error.
+
+### Recruiting-trial codes (draft for patient trial search)
+
+`make recruiting-codes` codes every recruiting Phase 3 or Phase 2/3 study with a site in the United States or Canada
+with the LLM, LLM-first: a study keeps the model's publishable codes (verified quote, not low confidence or catch-all)
+and falls back to the rules' exact codes only when the model has none, as the `llm_first:<model>` scoring arm.
+Supplementary categories are left out. Without `--go` it only prints the study count and estimated cost; answers already
+in the production, eval or coding-accuracy caches for the same model and prompt are reused. Output: one row per study
+and code (title, conditions, US/Canada states, code, label, source, evidence, URL) in `./recruiting/codes_<model>.csv`
+and `analysis/recruiting/` of the data bucket; nothing is published to the dashboard or Athena.
+
+```
+make recruiting-codes MODEL=us.anthropic.claude-sonnet-4-6 ARGS="--price-in 3.3 --price-out 16.5 --price-cache-read 0.33"
+make recruiting-codes MODEL=us.anthropic.claude-sonnet-4-6 ARGS="--go --price-in 3.3 --price-out 16.5 --price-cache-read 0.33"
+```
 
 ### Coding accuracy experiment
 
