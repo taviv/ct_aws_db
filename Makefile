@@ -1,7 +1,7 @@
 STACK ?= ct-pipeline
 PY    ?= python3
 
-.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match coding-accuracy duration-experiments us-burden verify local serve
+.PHONY: install test lint fmt validate build deploy dashboards backfill run reference umls-coverage llm-eval llm-code llm-try llm-code-cloud llm-xeval llm-adjudicate llm-status llm-retry condition-stats condition-audit trial-match recruiting-codes coding-accuracy duration-experiments us-burden verify local serve
 
 install:
 	$(PY) -m pip install -r requirements-dev.txt
@@ -104,6 +104,14 @@ trial-match:
 	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
 	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
 	.verify-venv/bin/python scripts/trial_match.py --stack $(STACK) --model "$(MODEL)" $(ARGS)
+
+## LLM-first ICD-10-CM codes for recruiting phase 3 trials with a US/Canada site (rough draft for patient
+## trial search; prints count and cost unless ARGS has --go; writes analysis/recruiting/ only)
+recruiting-codes:
+	@test -n "$(MODEL)" || (echo "Set MODEL=<Bedrock model or inference-profile id>" && exit 1)
+	@test -x .verify-venv/bin/python || $(VERIFY_PY) -m venv .verify-venv
+	@.verify-venv/bin/python -m pip install -q -r src/requirements.txt boto3
+	.verify-venv/bin/python scripts/recruiting_codes.py --stack $(STACK) --model "$(MODEL)" $(ARGS)
 
 ## Trial duration vs ICD-10-CM chapter: censored KM medians, adjusted AFT/Cox models, duration
 ## decomposition (writes duration_report/report.md + results.json; read-only)
